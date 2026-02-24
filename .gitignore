@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.spotify_cache
+token.json
+client_secret*.json
+playlist_log.txt
