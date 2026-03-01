@@ -1,16 +1,46 @@
 # YouTube Music Festival Playlist Generator
 
-This Python script reads a text file full of band names, automatically finds their **Top 3 most popular songs** natively on YouTube Music, and creates a brand new public playlist on your personal YouTube account containing all of those tracks! 
+This Python script reads a text file full of band names, finds songs for each artist on YouTube Music, and creates a playlist on your personal YouTube account. Choose from **9 different playlist modes** including top popular, deep cuts, era-specific, live setlists, and more.
 
 It's completely free to use and bypasses Spotify's new Premium-only developer API restrictions.
+
+## Playlist Modes
+
+| Mode | Description |
+|------|-------------|
+| **1. Top Popular Now** | Top trending songs per artist (current popularity) |
+| **2. Most Played Ever** | All-time most viewed songs, sorted by actual view count |
+| **3. Best of Albums** | Most played song from each album (filters out deluxe/bonus/remix editions) |
+| **4. Deep Cuts** | Hidden gems - skips the obvious hits |
+| **5. Latest Releases** | Most recent singles and songs |
+| **6. One Hit Sampler** | Just the #1 song per artist for a quick overview |
+| **7. Era Picker** | Songs from a specific year range (e.g. only 90s tracks) |
+| **8. Setlist Mode** | Most commonly played live songs via setlist.fm |
+| **9. Genre Cluster** | Auto-groups bands by genre (Metal, Rock, Punk, Electronic, etc.) and creates a separate playlist per genre |
+
+### Extra Features
+- **Duplicate detection** - automatically skips songs already in the playlist
+- **Resume support** - if the script crashes mid-run, restart it and pick up where you left off
+- **Multi-festival support** - use any bands file, or enter bands manually
+- **Configurable** - choose how many songs per artist, how many albums to scan, custom playlist names
 
 ## Prerequisites
 
 You need Python installed on your computer. You also need to install the required Python libraries.
 Open your terminal or command prompt and run:
 ```bash
-pip install ytmusicapi google-auth-oauthlib google-api-python-client
+pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
 ```
+
+### Optional: Setlist Mode Setup
+Mode 8 (Setlist Mode) uses the [setlist.fm API](https://api.setlist.fm) to find what songs bands actually play live. To use it:
+1. Register for a free API key at https://api.setlist.fm/docs/1.0/ui/index.html
+2. Set it as an environment variable before running the script:
+```bash
+export SETLIST_FM_API_KEY="your-key-here"
+python bot.py
+```
+If the key isn't set, Setlist Mode falls back to Top Popular.
 
 ## Step 1: Creating a Google Cloud Console Project
 The `ytmusicapi` handles all the song searching without needing an API key. However, to actually **create a playlist** on your personal YouTube account and add songs to it, the script needs to use the official Google YouTube Data API.
