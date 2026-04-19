@@ -1,5 +1,6 @@
 import os
 import re
+import glob
 import json
 import time
 import requests
@@ -11,8 +12,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+
+def _find_client_secrets_file():
+    """Find the OAuth client secrets file via glob so users can keep Google's
+    default download name or rename it to `client_secret.json`."""
+    matches = sorted(glob.glob('client_secret*.json'))
+    return matches[0] if matches else 'client_secret.json'
+
+
 # --- CONFIGURATION ---
-YOUTUBE_CLIENT_SECRETS_FILE = 'client_secret_1089582393796-e9mev9i2a4l4pcbbqvpj0prhg9p2t8kr.apps.googleusercontent.com.json'
+YOUTUBE_CLIENT_SECRETS_FILE = _find_client_secrets_file()
 DEFAULT_BANDS_FILE = 'bands.txt'
 LOG_FILE = 'playlist_log.txt'
 TOKEN_FILE = 'token.json'
@@ -127,13 +136,21 @@ def find_artist(band_name):
     return search_results[0]['browseId']
 
 
+_view_count_cache = {}
+
+
 def get_view_count(video_id):
-    """Get the view count for a video via YouTube Music."""
+    """Get the view count for a video via YouTube Music. Cached per video_id
+    to avoid redundant lookups when the same track is ranked in multiple modes."""
+    if video_id in _view_count_cache:
+        return _view_count_cache[video_id]
     try:
         details = ytmusic.get_song(video_id)
-        return int(details.get('videoDetails', {}).get('viewCount', 0))
+        views = int(details.get('videoDetails', {}).get('viewCount', 0))
     except Exception:
-        return 0
+        views = 0
+    _view_count_cache[video_id] = views
+    return views
 
 
 def is_original_album(title):
@@ -186,15 +203,13 @@ def filter_unique_albums(albums):
 # DUPLICATE DETECTION
 # =============================================================================
 
-added_video_ids = set()
-
-
-def add_video_if_unique(youtube, playlist_id, video_id):
-    """Add a video to the playlist only if it hasn't been added already."""
-    if video_id in added_video_ids:
+def add_video_if_unique(youtube, playlist_id, video_id, seen_videos):
+    """Add a video to the playlist only if it's not already in `seen_videos`.
+    Mutates `seen_videos` on success."""
+    if video_id in seen_videos:
         return False
     add_video_to_playlist(youtube, playlist_id, video_id)
-    added_video_ids.add(video_id)
+    seen_videos.add(video_id)
     return True
 
 
@@ -410,6 +425,21 @@ def get_era_tracks(band_name, count=3, start_year=None, end_year=None):
     return [vid for vid, _ in all_tracks[:count]]
 
 
+_last_setlist_request = 0.0
+
+
+def _setlist_get(url, headers, params):
+    """GET against setlist.fm, enforcing a minimum 1s gap between calls so
+    we stay under the public rate limit regardless of how many bands we iterate."""
+    global _last_setlist_request
+    elapsed = time.time() - _last_setlist_request
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+    resp = requests.get(url, headers=headers, params=params, timeout=10)
+    _last_setlist_request = time.time()
+    return resp
+
+
 def get_setlist_tracks(band_name, count=3):
     """Mode 8: Most commonly played live songs (via setlist.fm API)."""
     print(f"  Searching setlist data: {band_name}")
@@ -425,11 +455,10 @@ def get_setlist_tracks(band_name, count=3):
 
     # Search for the artist on setlist.fm
     try:
-        resp = requests.get(
+        resp = _setlist_get(
             'https://api.setlist.fm/rest/1.0/search/artists',
-            params={'artistName': band_name, 'sort': 'relevance'},
             headers=headers,
-            timeout=10,
+            params={'artistName': band_name, 'sort': 'relevance'},
         )
         if resp.status_code != 200:
             print(f"    setlist.fm search failed ({resp.status_code}), falling back")
@@ -446,13 +475,11 @@ def get_setlist_tracks(band_name, count=3):
         return get_top_popular(band_name, count)
 
     # Fetch recent setlists
-    time.sleep(1)  # respect setlist.fm rate limit
     try:
-        resp = requests.get(
+        resp = _setlist_get(
             f'https://api.setlist.fm/rest/1.0/artist/{artist_mbid}/setlists',
-            params={'p': 1},
             headers=headers,
-            timeout=10,
+            params={'p': 1},
         )
         if resp.status_code != 200:
             return get_top_popular(band_name, count)
@@ -735,9 +762,10 @@ def call_track_mode(choice, settings, band_name):
 
 
 def process_bands(youtube, playlist_id, bands, choice, settings,
-                  log_entries, start_index=0):
+                  log_entries, seen_videos, start_index=0):
     """Process a list of bands, adding tracks to the playlist.
 
+    `seen_videos` is a set of already-added video IDs; mutated in place.
     Supports resuming from start_index. Saves progress after each band.
     Returns the number of duplicates skipped.
     """
@@ -755,7 +783,7 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
             else:
                 added = 0
                 for v_id in video_ids:
-                    if add_video_if_unique(youtube, playlist_id, v_id):
+                    if add_video_if_unique(youtube, playlist_id, v_id, seen_videos):
                         log_entries.append(f"Added video {v_id} for {band}")
                         added += 1
                     else:
@@ -775,7 +803,7 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
             'settings': settings,
             'band_index': i + 1,
             'bands': bands,
-            'added_video_ids': list(added_video_ids),
+            'added_video_ids': list(seen_videos),
             'log_entries': log_entries,
         })
 
@@ -787,10 +815,9 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
 # =============================================================================
 
 def main():
-    global added_video_ids
-
     if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
-        print(f"Error: Missing {YOUTUBE_CLIENT_SECRETS_FILE}")
+        print(f"Error: no client_secret*.json file found in the current directory.")
+        print("Download it from Google Cloud Console (see README) and place it here.")
         return
 
     # --- Check for resume ---
@@ -807,14 +834,15 @@ def main():
             settings = progress['settings']
             bands = progress['bands']
             log_entries = progress['log_entries']
-            added_video_ids = set(progress.get('added_video_ids', []))
+            seen_videos = set(progress.get('added_video_ids', []))
             playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
 
             print(f"Resuming from band {idx + 1}/{total}")
             print(f"Playlist: {playlist_url}\n")
 
             dupes = process_bands(youtube, playlist_id, bands, choice,
-                                  settings, log_entries, start_index=idx)
+                                  settings, log_entries, seen_videos,
+                                  start_index=idx)
 
             clear_progress()
             with open(LOG_FILE, 'w', encoding='utf-8') as f:
@@ -885,9 +913,10 @@ def main():
             ]
 
             # Reset duplicate tracking per genre playlist
-            added_video_ids = set()
+            seen_videos = set()
             dupes = process_bands(youtube, playlist_id, genre_bands,
-                                  track_choice, track_settings, log_entries)
+                                  track_choice, track_settings, log_entries,
+                                  seen_videos)
             total_dupes += dupes
             all_log_entries.extend(log_entries)
             all_log_entries.append("")
@@ -917,7 +946,9 @@ def main():
         f"Playlist URL: {playlist_url}\n",
     ]
 
-    dupes = process_bands(youtube, playlist_id, bands, choice, settings, log_entries)
+    seen_videos = set()
+    dupes = process_bands(youtube, playlist_id, bands, choice, settings,
+                          log_entries, seen_videos)
 
     clear_progress()
     with open(LOG_FILE, 'w', encoding='utf-8') as f:
