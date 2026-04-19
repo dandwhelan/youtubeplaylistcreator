@@ -29,8 +29,15 @@ It's completely free to use and bypasses Spotify's new Premium-only developer AP
 You need Python installed on your computer. You also need to install the required Python libraries.
 Open your terminal or command prompt and run:
 ```bash
+pip install -r requirements.txt
+```
+
+Or install the packages individually:
+```bash
 pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
 ```
+
+If you see `ModuleNotFoundError: No module named 'requests'` (or similar) when running the script, the dependencies aren't installed in the Python interpreter you're using. On Windows try `py -m pip install -r requirements.txt`; on macOS/Linux try `python3 -m pip install -r requirements.txt`.
 
 ### Optional: Setlist Mode Setup
 Mode 8 (Setlist Mode) uses the [setlist.fm API](https://api.setlist.fm) to find what songs bands actually play live. To use it:
