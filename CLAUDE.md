@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Does
 
-A Python CLI tool that creates curated YouTube Music playlists from a list of band names. It supports 9 playlist generation modes (top hits, deep cuts, era-based, setlists, genre clusters, etc.) and interacts with three external APIs: YouTube Data API v3, setlist.fm, and MusicBrainz.
+A Python CLI tool that creates curated music playlists from a list of band names. User picks the target platform at run time — **YouTube Music** or **Spotify** — and one of 9 playlist generation modes (top hits, deep cuts, era-based, setlists, genre clusters, etc.). Interacts with: YouTube Data API v3, Spotify Web API, setlist.fm, MusicBrainz.
 
 ## Running the App
 
@@ -20,14 +20,23 @@ pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
 
 ## Architecture
 
-The entire application lives in `bot.py` (monolithic, ~32KB). The flow is:
+Code is split across:
+- **`bot.py`** — CLI orchestration: menus, mode dispatch, YouTube Music mode implementations, `main()`, resume handling.
+- **`spotify_client.py`** — parallel Spotify backend: OAuth, playlist ops, and all 8 track-mode implementations against the Spotify Web API.
+- **`setlist_fm.py`** — shared setlist.fm helper (rate-limited GETs, "most-played-live" song-name fetch) used by both backends.
+- **`poster_ocr.py`** — Gemini vision wrapper for festival-poster band extraction (Band Source option 4).
 
-1. **Auth** — `get_youtube_service()` does OAuth2 via Google, caches tokens in `token.json`
-2. **Input** — user picks a mode (1–9) and settings; band list loaded from `bands.txt`
-3. **Search** — `find_artist()` + `ytmusicapi` find tracks per band
-4. **Dedup** — global `added_video_ids` set prevents duplicate songs across the playlist
-5. **Add to playlist** — YouTube Data API v3 inserts video IDs
-6. **Resume** — `save_progress()` / `load_progress()` persist state to `progress.json` so a crashed run can be resumed
+The flow is:
+
+1. **Band source** — user picks file/manual/poster → `bands` list
+2. **Target platform** — `pick_platform()` returns `'youtube'` or `'spotify'`
+3. **Mode selection** — user picks a mode (1–9) and settings
+4. **Auth** — `authenticate_backend(platform)` dispatches to `get_youtube_service()` or `spotify_client.authenticate()`
+5. **Playlist creation** — `create_backend_playlist(platform, client, ...)`
+6. **Track finding** — `call_track_mode(platform, client, choice, ...)` dispatches to YT-Music mode funcs or `SPOTIFY_TRACK_MODES[choice]`
+7. **Dedup + oversample** — each mode returns extra candidates so duplicates can be replaced with alternates; `seen_tracks` set prevents the same track twice
+8. **Add to playlist** — `add_backend_track(platform, client, ...)`
+9. **Resume** — `progress.json` stores `platform` alongside the rest so a crashed run re-auths the right backend
 
 ### The 9 Modes
 
@@ -55,14 +64,20 @@ Each mode is a distinct code path within `process_bands()`:
 
 ## Key Files
 
-- `bot.py` — entire application
+- `bot.py` — CLI orchestration and YouTube Music modes
+- `spotify_client.py` — Spotify Web API backend
+- `setlist_fm.py` — shared setlist.fm helper
+- `poster_ocr.py` — Gemini vision wrapper for poster OCR
 - `bands.txt` — input: one artist name per line
-- `token.json` — OAuth token cache (not committed)
+- `token.json` — YouTube OAuth token cache (not committed)
+- `.spotify_cache` — Spotify OAuth token cache (not committed)
 - `progress.json` — resume state (not committed)
 - `playlist_log.txt` — run log
 
 ## API Credentials
 
-- **YouTube API**: Requires `client_secret_*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup.
-- **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
+- **YouTube API** (YouTube Music target): Requires `client_secret*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup by `_find_client_secrets_file()`.
+- **Spotify Web API** (Spotify target): Requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` env vars. Create a free app at https://developer.spotify.com/dashboard and add `http://127.0.0.1:8765/callback` as a Redirect URI. Token cached in `.spotify_cache` by spotipy.
+- **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `setlist_fm._get()`.
 - **MusicBrainz** (Mode 9 only): No key required; uses public API with rate limiting.
+- **Gemini** (Band Source option 4 only): API key read from the `GEMINI_API_KEY` environment variable.

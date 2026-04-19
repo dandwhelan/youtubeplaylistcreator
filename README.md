@@ -1,8 +1,8 @@
-# YouTube Music Festival Playlist Generator
+# Festival Playlist Generator (YouTube Music + Spotify)
 
-This Python script reads a text file full of band names, finds songs for each artist on YouTube Music, and creates a playlist on your personal YouTube account. Choose from **9 different playlist modes** including top popular, deep cuts, era-specific, live setlists, and more.
+This Python script reads a text file full of band names, finds songs for each artist, and creates a playlist on either your personal **YouTube Music** account or your personal **Spotify** account — you pick the target when you run it. Choose from **9 different playlist modes** including top popular, deep cuts, era-specific, live setlists, and more.
 
-It's completely free to use and bypasses Spotify's new Premium-only developer API restrictions.
+It's completely free to use.
 
 ## Playlist Modes
 
@@ -34,10 +34,31 @@ pip install -r requirements.txt
 
 Or install the packages individually:
 ```bash
-pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
+pip install ytmusicapi google-auth-oauthlib google-api-python-client requests spotipy
 ```
 
 If you see `ModuleNotFoundError: No module named 'requests'` (or similar) when running the script, the dependencies aren't installed in the Python interpreter you're using. On Windows try `py -m pip install -r requirements.txt`; on macOS/Linux try `python3 -m pip install -r requirements.txt`.
+
+### Using Spotify as the Target Platform
+When you run the script you'll be asked to pick **YouTube Music** or **Spotify**. To use Spotify:
+
+1. Create a free app at https://developer.spotify.com/dashboard
+2. Open the app's settings, add **`http://127.0.0.1:8765/callback`** to its **Redirect URIs** list, and save.
+3. Copy the app's **Client ID** and **Client Secret**.
+4. Set them as environment variables and run:
+```bash
+# Windows (PowerShell)
+$env:SPOTIFY_CLIENT_ID="your-client-id"
+$env:SPOTIFY_CLIENT_SECRET="your-client-secret"
+# macOS / Linux
+export SPOTIFY_CLIENT_ID="your-client-id"
+export SPOTIFY_CLIENT_SECRET="your-client-secret"
+python bot.py
+```
+
+The first Spotify run opens a browser tab for you to approve the app — same idea as the YouTube OAuth flow. The token is cached in `.spotify_cache` so subsequent runs skip the browser.
+
+If you only ever use Spotify, you can skip Steps 1–5 below (the YouTube Cloud Console setup).
 
 ### Optional: Setlist Mode Setup
 Mode 8 (Setlist Mode) uses the [setlist.fm API](https://api.setlist.fm) to find what songs bands actually play live. To use it:

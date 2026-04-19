@@ -4,13 +4,15 @@ import glob
 import json
 import time
 import requests
-from collections import Counter
 from ytmusicapi import YTMusic
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+import spotify_client
+from setlist_fm import SETLIST_FM_API_KEY, get_most_played_live
 
 
 def _find_client_secrets_file():
@@ -28,8 +30,7 @@ TOKEN_FILE = 'token.json'
 PROGRESS_FILE = 'progress.json'
 PLAYLIST_PRIVACY = 'public'
 
-# Set this env var to enable Setlist Mode (free key from https://api.setlist.fm)
-SETLIST_FM_API_KEY = os.environ.get('SETLIST_FM_API_KEY', '')
+# Setlist Mode (Mode 8) uses the SETLIST_FM_API_KEY env var, read in setlist_fm.py
 
 # --- API SETUP ---
 SCOPES = ['https://www.googleapis.com/auth/youtube']
@@ -197,20 +198,6 @@ def filter_unique_albums(albums):
             unique.append(album)
 
     return unique
-
-
-# =============================================================================
-# DUPLICATE DETECTION
-# =============================================================================
-
-def add_video_if_unique(youtube, playlist_id, video_id, seen_videos):
-    """Add a video to the playlist only if it's not already in `seen_videos`.
-    Mutates `seen_videos` on success."""
-    if video_id in seen_videos:
-        return False
-    add_video_to_playlist(youtube, playlist_id, video_id)
-    seen_videos.add(video_id)
-    return True
 
 
 # =============================================================================
@@ -425,85 +412,18 @@ def get_era_tracks(band_name, count=3, start_year=None, end_year=None):
     return [vid for vid, _ in all_tracks[:count]]
 
 
-_last_setlist_request = 0.0
-
-
-def _setlist_get(url, headers, params):
-    """GET against setlist.fm, enforcing a minimum 1s gap between calls so
-    we stay under the public rate limit regardless of how many bands we iterate."""
-    global _last_setlist_request
-    elapsed = time.time() - _last_setlist_request
-    if elapsed < 1.0:
-        time.sleep(1.0 - elapsed)
-    resp = requests.get(url, headers=headers, params=params, timeout=10)
-    _last_setlist_request = time.time()
-    return resp
-
-
 def get_setlist_tracks(band_name, count=3):
-    """Mode 8: Most commonly played live songs (via setlist.fm API)."""
+    """Mode 8: most commonly played live songs (via setlist.fm), searched on
+    YouTube Music. Falls back to Mode 1 if setlist.fm is unconfigured or empty."""
     print(f"  Searching setlist data: {band_name}")
 
-    if not SETLIST_FM_API_KEY:
-        print("    SETLIST_FM_API_KEY not set - falling back to top popular")
+    song_names = get_most_played_live(band_name, count)
+    if not song_names:
+        print("    setlist.fm unavailable or no data — falling back to top popular")
         return get_top_popular(band_name, count)
 
-    headers = {
-        'Accept': 'application/json',
-        'x-api-key': SETLIST_FM_API_KEY,
-    }
-
-    # Search for the artist on setlist.fm
-    try:
-        resp = _setlist_get(
-            'https://api.setlist.fm/rest/1.0/search/artists',
-            headers=headers,
-            params={'artistName': band_name, 'sort': 'relevance'},
-        )
-        if resp.status_code != 200:
-            print(f"    setlist.fm search failed ({resp.status_code}), falling back")
-            return get_top_popular(band_name, count)
-
-        artists = resp.json().get('artist', [])
-        if not artists:
-            print(f"    Not found on setlist.fm, falling back")
-            return get_top_popular(band_name, count)
-
-        artist_mbid = artists[0]['mbid']
-    except Exception as e:
-        print(f"    setlist.fm error: {e}, falling back")
-        return get_top_popular(band_name, count)
-
-    # Fetch recent setlists
-    try:
-        resp = _setlist_get(
-            f'https://api.setlist.fm/rest/1.0/artist/{artist_mbid}/setlists',
-            headers=headers,
-            params={'p': 1},
-        )
-        if resp.status_code != 200:
-            return get_top_popular(band_name, count)
-
-        setlists = resp.json().get('setlist', [])
-    except Exception:
-        return get_top_popular(band_name, count)
-
-    # Count song occurrences across the last 10 shows
-    song_counts = Counter()
-    for setlist in setlists[:10]:
-        for s in setlist.get('sets', {}).get('set', []):
-            for song in s.get('song', []):
-                name = song.get('name', '')
-                if name:
-                    song_counts[name] += 1
-
-    if not song_counts:
-        return get_top_popular(band_name, count)
-
-    # Find the most commonly played songs on YouTube Music
-    top_song_names = [name for name, _ in song_counts.most_common(count)]
     video_ids = []
-    for song_name in top_song_names:
+    for song_name in song_names:
         results = ytmusic.search(f"{band_name} {song_name}", filter="songs", limit=1)
         if results and 'videoId' in results[0]:
             video_ids.append(results[0]['videoId'])
@@ -627,7 +547,7 @@ ALL_MODES['9'] = {
 
 def show_menu():
     """Display playlist mode selection menu."""
-    print("\n=== YouTube Playlist Creator ===")
+    print("\n=== Playlist Mode ===")
     print("Choose your playlist mode:\n")
     for key, mode in ALL_MODES.items():
         label = mode['name']
@@ -742,30 +662,113 @@ def get_bands():
 
 
 # =============================================================================
-# BAND PROCESSING
+# BACKEND DISPATCH
 # =============================================================================
 
-def call_track_mode(choice, settings, band_name):
-    """Call the appropriate track-finding function with the right arguments."""
-    func = TRACK_MODES[choice]['func']
+SPOTIFY_TRACK_MODES = {
+    '1': spotify_client.get_top_popular,
+    '2': spotify_client.get_most_played_ever,
+    '3': spotify_client.get_best_of_albums,
+    '4': spotify_client.get_deep_cuts,
+    '5': spotify_client.get_latest_releases,
+    '6': spotify_client.get_one_hit_sampler,
+    '7': spotify_client.get_era_tracks,
+    '8': spotify_client.get_setlist_tracks,
+}
+
+
+def pick_platform():
+    """Let the user choose where their playlist is created."""
+    print("\n=== Target Platform ===")
+    print("  1. YouTube Music")
+    print("  2. Spotify")
+    while True:
+        choice = input("Enter choice (1-2): ").strip()
+        if choice == '1':
+            return 'youtube'
+        if choice == '2':
+            return 'spotify'
+        print("Invalid choice.")
+
+
+def authenticate_backend(platform):
+    """Do the OAuth dance for the selected backend and return its client."""
+    if platform == 'youtube':
+        return get_youtube_service()
+    return spotify_client.authenticate()
+
+
+def create_backend_playlist(platform, client, name, description):
+    if platform == 'youtube':
+        return create_playlist(client, name, description)
+    return spotify_client.create_playlist(client, name, description)
+
+
+def add_backend_track(platform, client, playlist_id, track_id, seen_tracks):
+    """Add a track to the playlist only if it hasn't been added already.
+    Mutates `seen_tracks` on success. Returns True if added, False if duplicate."""
+    if track_id in seen_tracks:
+        return False
+    if platform == 'youtube':
+        add_video_to_playlist(client, playlist_id, track_id)
+    else:
+        spotify_client.add_track(client, playlist_id, track_id)
+    seen_tracks.add(track_id)
+    return True
+
+
+def backend_playlist_url(platform, playlist_id):
+    if platform == 'youtube':
+        return f"https://music.youtube.com/playlist?list={playlist_id}"
+    return spotify_client.playlist_url(playlist_id)
+
+
+MODES_WITH_COUNT = {'1', '2', '4', '5', '7', '8'}
+
+
+def call_track_mode(platform, client, choice, settings, band_name):
+    """Dispatch to the right track-finding function for the platform.
+
+    For count-based modes we oversample so duplicates can be replaced with
+    the next-best alternate instead of leaving the slot empty."""
+    if platform == 'youtube':
+        func = TRACK_MODES[choice]['func']
+        yt_args = True
+    else:
+        func = SPOTIFY_TRACK_MODES[choice]
+        yt_args = False
+
+    # YouTube mode funcs: (band, ...); Spotify mode funcs: (client, band, ...)
+    def call(**kwargs):
+        if yt_args:
+            return func(band_name, **kwargs)
+        return func(client, band_name, **kwargs)
 
     if choice == '3':
-        return func(band_name, max_albums=settings.get('max_albums', 5))
+        return call(max_albums=settings.get('max_albums', 5))
     if choice == '6':
-        return func(band_name)
+        return call()
+
+    target = settings.get('count', 3)
+    oversample = max(target * 3, target + 5)
+
     if choice == '7':
-        return func(band_name, count=settings.get('count', 3),
+        return call(count=oversample,
                     start_year=settings.get('start_year'),
                     end_year=settings.get('end_year'))
     # Modes 1, 2, 4, 5, 8
-    return func(band_name, count=settings.get('count', 3))
+    return call(count=oversample)
 
 
-def process_bands(youtube, playlist_id, bands, choice, settings,
-                  log_entries, seen_videos, start_index=0):
+# =============================================================================
+# BAND PROCESSING
+# =============================================================================
+
+def process_bands(platform, client, playlist_id, bands, choice, settings,
+                  log_entries, seen_tracks, start_index=0):
     """Process a list of bands, adding tracks to the playlist.
 
-    `seen_videos` is a set of already-added video IDs; mutated in place.
+    `seen_tracks` is a set of already-added track IDs; mutated in place.
     Supports resuming from start_index. Saves progress after each band.
     Returns the number of duplicates skipped.
     """
@@ -775,22 +778,35 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
         band = bands[i]
         print(f"[{i + 1}/{len(bands)}] {band}")
         try:
-            video_ids = call_track_mode(choice, settings, band)
+            track_ids = call_track_mode(platform, client, choice, settings, band)
 
-            if not video_ids:
+            if not track_ids:
                 log_entries.append(f"No tracks found for {band}")
                 print("  No tracks found")
             else:
+                # For count-based modes, keep adding until we hit the target
+                # number of unique tracks — dupes shouldn't shrink the slot.
+                target = settings.get('count', 3) if choice in MODES_WITH_COUNT else len(track_ids)
                 added = 0
-                for v_id in video_ids:
-                    if add_video_if_unique(youtube, playlist_id, v_id, seen_videos):
-                        log_entries.append(f"Added video {v_id} for {band}")
+                dupes_in_band = 0
+                for track_id in track_ids:
+                    if added >= target:
+                        break
+                    if add_backend_track(platform, client, playlist_id, track_id, seen_tracks):
+                        log_entries.append(f"Added track {track_id} for {band}")
                         added += 1
                     else:
-                        log_entries.append(f"Skipped duplicate {v_id} for {band}")
-                        dupes_skipped += 1
-                print(f"  Added {added} track(s)"
-                      + (f" ({len(video_ids) - added} duplicate(s) skipped)" if added < len(video_ids) else ""))
+                        log_entries.append(f"Skipped duplicate {track_id} for {band}")
+                        dupes_in_band += 1
+                dupes_skipped += dupes_in_band
+
+                summary = f"  Added {added} track(s)"
+                if dupes_in_band:
+                    summary += f" ({dupes_in_band} duplicate(s) skipped, replaced with alternates)"
+                if added < target:
+                    summary += f" — only {added}/{target} unique available"
+                    log_entries.append(f"Only {added}/{target} unique tracks for {band}")
+                print(summary)
 
         except Exception as e:
             log_entries.append(f"Error on {band}: {e}")
@@ -798,12 +814,13 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
 
         # Save progress after each band
         save_progress({
+            'platform': platform,
             'playlist_id': playlist_id,
             'choice': choice,
             'settings': settings,
             'band_index': i + 1,
             'bands': bands,
-            'added_video_ids': list(seen_videos),
+            'seen_tracks': list(seen_tracks),
             'log_entries': log_entries,
         })
 
@@ -815,40 +832,48 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
 # =============================================================================
 
 def main():
-    if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
-        print(f"Error: no client_secret*.json file found in the current directory.")
-        print("Download it from Google Cloud Console (see README) and place it here.")
-        return
-
     # --- Check for resume ---
     progress = load_progress()
     if progress:
         total = len(progress.get('bands', []))
         idx = progress.get('band_index', 0)
-        print(f"\nFound saved progress: band {idx}/{total}")
+        platform = progress.get('platform', 'youtube')
+        print(f"\nFound saved progress: band {idx}/{total} on {platform.title()}")
         answer = input("Resume previous session? [y/n]: ").strip().lower()
         if answer == 'y':
-            youtube = get_youtube_service()
+            if platform == 'youtube' and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+                print("Error: no client_secret*.json file found. Cannot resume.")
+                return
+            try:
+                client = authenticate_backend(platform)
+            except RuntimeError as e:
+                print(f"Auth failed: {e}")
+                return
+
             playlist_id = progress['playlist_id']
             choice = progress['choice']
             settings = progress['settings']
             bands = progress['bands']
             log_entries = progress['log_entries']
-            seen_videos = set(progress.get('added_video_ids', []))
-            playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
+            seen_tracks = set(
+                progress.get('seen_tracks')
+                or progress.get('added_video_ids')
+                or []
+            )
+            url = backend_playlist_url(platform, playlist_id)
 
             print(f"Resuming from band {idx + 1}/{total}")
-            print(f"Playlist: {playlist_url}\n")
+            print(f"Playlist: {url}\n")
 
-            dupes = process_bands(youtube, playlist_id, bands, choice,
-                                  settings, log_entries, seen_videos,
+            dupes = process_bands(platform, client, playlist_id, bands, choice,
+                                  settings, log_entries, seen_tracks,
                                   start_index=idx)
 
             clear_progress()
             with open(LOG_FILE, 'w', encoding='utf-8') as f:
                 f.write("\n".join(log_entries))
             print(f"\nDone! {total} bands processed. {dupes} duplicate(s) skipped.")
-            print(f"Playlist: {playlist_url}")
+            print(f"Playlist: {url}")
             print(f"Log saved to {LOG_FILE}")
             return
         else:
@@ -858,6 +883,13 @@ def main():
     bands = get_bands()
     if not bands:
         print("No bands to process.")
+        return
+
+    platform = pick_platform()
+
+    if platform == 'youtube' and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+        print("Error: no client_secret*.json file found in the current directory.")
+        print("Download it from Google Cloud Console (see README) and place it here.")
         return
 
     choice = show_menu()
@@ -890,7 +922,12 @@ def main():
             print("Cancelled.")
             return
 
-        youtube = get_youtube_service()
+        try:
+            client = authenticate_backend(platform)
+        except RuntimeError as e:
+            print(f"Auth failed: {e}")
+            return
+
         all_log_entries = []
         total_dupes = 0
 
@@ -900,23 +937,24 @@ def main():
             ).strip() or f"Download 2026 - {genre}"
 
             mode_desc = TRACK_MODES[track_choice]['description']
-            description = f"{genre} bands - {mode_desc}. Generated by YouTube Playlist Creator."
-            playlist_id = create_playlist(youtube, playlist_name, description)
-            playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-            print(f"\nPlaylist '{playlist_name}' created: {playlist_url}")
+            description = f"{genre} bands - {mode_desc}. Generated by Playlist Creator."
+            playlist_id = create_backend_playlist(platform, client, playlist_name, description)
+            url = backend_playlist_url(platform, playlist_id)
+            print(f"\nPlaylist '{playlist_name}' created: {url}")
 
             log_entries = [
                 f"Genre: {genre}",
+                f"Platform: {platform}",
                 f"Playlist: {playlist_name}",
                 f"Track mode: {TRACK_MODES[track_choice]['name']}",
-                f"Playlist URL: {playlist_url}\n",
+                f"Playlist URL: {url}\n",
             ]
 
             # Reset duplicate tracking per genre playlist
-            seen_videos = set()
-            dupes = process_bands(youtube, playlist_id, genre_bands,
+            seen_tracks = set()
+            dupes = process_bands(platform, client, playlist_id, genre_bands,
                                   track_choice, track_settings, log_entries,
-                                  seen_videos)
+                                  seen_tracks)
             total_dupes += dupes
             all_log_entries.extend(log_entries)
             all_log_entries.append("")
@@ -931,31 +969,38 @@ def main():
     playlist_name = get_playlist_name(choice, settings)
     settings['playlist_name'] = playlist_name
 
-    print(f"\nMode: {ALL_MODES[choice]['name']}")
+    print(f"\nPlatform: {platform.title()}")
+    print(f"Mode: {ALL_MODES[choice]['name']}")
     print(f"Playlist: {playlist_name}")
 
-    youtube = get_youtube_service()
-    description = f"{ALL_MODES[choice]['description']}. Generated by YouTube Playlist Creator."
-    playlist_id = create_playlist(youtube, playlist_name, description)
-    playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-    print(f"Playlist created: {playlist_url}\n")
+    try:
+        client = authenticate_backend(platform)
+    except RuntimeError as e:
+        print(f"Auth failed: {e}")
+        return
+
+    description = f"{ALL_MODES[choice]['description']}. Generated by Playlist Creator."
+    playlist_id = create_backend_playlist(platform, client, playlist_name, description)
+    url = backend_playlist_url(platform, playlist_id)
+    print(f"Playlist created: {url}\n")
 
     log_entries = [
+        f"Platform: {platform}",
         f"Mode: {ALL_MODES[choice]['name']}",
         f"Playlist: {playlist_name}",
-        f"Playlist URL: {playlist_url}\n",
+        f"Playlist URL: {url}\n",
     ]
 
-    seen_videos = set()
-    dupes = process_bands(youtube, playlist_id, bands, choice, settings,
-                          log_entries, seen_videos)
+    seen_tracks = set()
+    dupes = process_bands(platform, client, playlist_id, bands, choice, settings,
+                          log_entries, seen_tracks)
 
     clear_progress()
     with open(LOG_FILE, 'w', encoding='utf-8') as f:
         f.write("\n".join(log_entries))
 
     print(f"\nDone! {len(bands)} bands processed. {dupes} duplicate(s) skipped.")
-    print(f"Playlist: {playlist_url}")
+    print(f"Playlist: {url}")
     print(f"Log saved to {LOG_FILE}")
 
 

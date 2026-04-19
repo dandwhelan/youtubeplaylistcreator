@@ -33,6 +33,8 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 - [ ] **Config file (`config.yaml`)** — supply mode, counts, year range, playlist name via config for scripted re-runs.
 
 ### Output / Sharing
-- [ ] **Multi-platform export** — also create Spotify / Apple Music / Tidal playlists from the same run.
+- [x] **Spotify target** — user picks YouTube Music or Spotify at run time; all 8 track modes have a native Spotify implementation. _(shipped: `spotify_client.py` + `pick_platform()`)_
+- [ ] **Apple Music / Tidal backends** — same pattern as `spotify_client.py`.
+- [ ] **Mirror-to-other-platform mode** — run one search, output playlists on both platforms simultaneously.
 - [ ] **CSV export** of the final tracklist (artist, title, album, year, duration, video ID).
 - [ ] **Markdown report** with album art, track durations, and release years.
