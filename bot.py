@@ -745,20 +745,30 @@ def get_bands():
 # BAND PROCESSING
 # =============================================================================
 
+MODES_WITH_COUNT = {'1', '2', '4', '5', '7', '8'}
+
+
 def call_track_mode(choice, settings, band_name):
-    """Call the appropriate track-finding function with the right arguments."""
+    """Call the appropriate track-finding function with the right arguments.
+
+    For count-based modes we oversample so duplicates can be replaced with
+    the next-best alternate instead of leaving the slot empty."""
     func = TRACK_MODES[choice]['func']
 
     if choice == '3':
         return func(band_name, max_albums=settings.get('max_albums', 5))
     if choice == '6':
         return func(band_name)
+
+    target = settings.get('count', 3)
+    oversample = max(target * 3, target + 5)
+
     if choice == '7':
-        return func(band_name, count=settings.get('count', 3),
+        return func(band_name, count=oversample,
                     start_year=settings.get('start_year'),
                     end_year=settings.get('end_year'))
     # Modes 1, 2, 4, 5, 8
-    return func(band_name, count=settings.get('count', 3))
+    return func(band_name, count=oversample)
 
 
 def process_bands(youtube, playlist_id, bands, choice, settings,
@@ -781,16 +791,29 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
                 log_entries.append(f"No tracks found for {band}")
                 print("  No tracks found")
             else:
+                # For count-based modes, keep adding until we hit the target
+                # number of unique tracks — dupes shouldn't shrink the slot.
+                target = settings.get('count', 3) if choice in MODES_WITH_COUNT else len(video_ids)
                 added = 0
+                dupes_in_band = 0
                 for v_id in video_ids:
+                    if added >= target:
+                        break
                     if add_video_if_unique(youtube, playlist_id, v_id, seen_videos):
                         log_entries.append(f"Added video {v_id} for {band}")
                         added += 1
                     else:
                         log_entries.append(f"Skipped duplicate {v_id} for {band}")
-                        dupes_skipped += 1
-                print(f"  Added {added} track(s)"
-                      + (f" ({len(video_ids) - added} duplicate(s) skipped)" if added < len(video_ids) else ""))
+                        dupes_in_band += 1
+                dupes_skipped += dupes_in_band
+
+                summary = f"  Added {added} track(s)"
+                if dupes_in_band:
+                    summary += f" ({dupes_in_band} duplicate(s) skipped, replaced with alternates)"
+                if added < target:
+                    summary += f" — only {added}/{target} unique available"
+                    log_entries.append(f"Only {added}/{target} unique tracks for {band}")
+                print(summary)
 
         except Exception as e:
             log_entries.append(f"Error on {band}: {e}")
