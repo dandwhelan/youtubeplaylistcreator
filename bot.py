@@ -701,16 +701,61 @@ def get_playlist_name(choice, settings):
     return custom or default_name
 
 
+def _bands_from_poster():
+    """Option 4: extract a band list from a festival poster via Gemini vision."""
+    source = input("Path or URL to the poster image: ").strip()
+    if not source:
+        print("No source given.")
+        return []
+
+    try:
+        from poster_ocr import extract_bands_from_poster
+    except ImportError as e:
+        print(f"Error: {e}")
+        return []
+
+    print("Extracting bands from poster (usually 5-15 seconds)...")
+    try:
+        bands = extract_bands_from_poster(source)
+    except Exception as e:
+        print(f"Poster OCR failed: {e}")
+        return []
+
+    if not bands:
+        print("No bands detected on the poster.")
+        return []
+
+    print(f"\nFound {len(bands)} bands:")
+    for name in bands:
+        print(f"  - {name}")
+
+    print("\nUse this list? [y] yes  [s] save to bands.txt and exit to edit  [n] cancel")
+    while True:
+        answer = input("> ").strip().lower()
+        if answer == 'y':
+            return bands
+        if answer == 's':
+            with open(DEFAULT_BANDS_FILE, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(bands) + '\n')
+            print(f"Saved to {DEFAULT_BANDS_FILE}. Edit it and re-run the script.")
+            return []
+        if answer == 'n':
+            print("Cancelled.")
+            return []
+        print("Please enter y, s, or n.")
+
+
 def get_bands():
     """Let the user choose where the band list comes from."""
     print("\n=== Band Source ===")
     print(f"  1. Use {DEFAULT_BANDS_FILE}")
     print("  2. Use a different file")
     print("  3. Enter bands manually")
+    print("  4. Scan a festival poster (OCR via Gemini)")
 
     while True:
-        choice = input("Enter choice (1-3): ").strip()
-        if choice in ('1', '2', '3'):
+        choice = input("Enter choice (1-4): ").strip()
+        if choice in ('1', '2', '3', '4'):
             break
         print("Invalid choice.")
 
@@ -728,6 +773,9 @@ def get_bands():
             return []
         with open(path, 'r', encoding='utf-8') as f:
             return [line.strip() for line in f if line.strip()]
+
+    if choice == '4':
+        return _bands_from_poster()
 
     # Manual entry
     print("Enter band names one per line. Type 'done' when finished:")

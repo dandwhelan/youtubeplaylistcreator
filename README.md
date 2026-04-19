@@ -34,7 +34,7 @@ pip install -r requirements.txt
 
 Or install the packages individually:
 ```bash
-pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
+pip install ytmusicapi google-auth-oauthlib google-api-python-client requests google-genai
 ```
 
 If you see `ModuleNotFoundError: No module named 'requests'` (or similar) when running the script, the dependencies aren't installed in the Python interpreter you're using. On Windows try `py -m pip install -r requirements.txt`; on macOS/Linux try `python3 -m pip install -r requirements.txt`.
@@ -48,6 +48,20 @@ export SETLIST_FM_API_KEY="your-key-here"
 python bot.py
 ```
 If the key isn't set, Setlist Mode falls back to Top Popular.
+
+### Optional: Festival Poster OCR (Band Source option 4)
+When picking a band source, option **4. Scan a festival poster** extracts band names directly from a festival poster image via Google Gemini vision — useful when a festival site doesn't publish a clean lineup but their poster has every act. Paste a local image path or a poster URL (e.g. from Music Festival Wizard), and the tool returns the band list ready to feed into any playlist mode.
+
+1. Get a free Gemini API key at https://aistudio.google.com/app/apikey
+2. Set it as an environment variable before running:
+```bash
+# Windows (PowerShell)
+$env:GEMINI_API_KEY="your-key-here"
+# macOS / Linux
+export GEMINI_API_KEY="your-key-here"
+python bot.py
+```
+The `google-genai` package (installed via `requirements.txt`) is what talks to Gemini.
 
 ## Step 1: Creating a Google Cloud Console Project
 The `ytmusicapi` handles all the song searching without needing an API key. However, to actually **create a playlist** on your personal YouTube account and add songs to it, the script needs to use the official Google YouTube Data API.
