@@ -64,5 +64,5 @@ Each mode is a distinct code path within `process_bands()`:
 ## API Credentials
 
 - **YouTube API**: Requires `client_secret_*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup.
-- **setlist.fm** (Mode 8 only): API key hardcoded as a constant near the top of `bot.py`.
+- **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
 - **MusicBrainz** (Mode 9 only): No key required; uses public API with rate limiting.
