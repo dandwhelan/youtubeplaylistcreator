@@ -8,13 +8,15 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 - [ ] **Progress save is O(n²)** — `save_progress` writes the full `bands` list, full log, and entire `added_video_ids` after every band. Swap for an append-only log, or only write the diff.
 - [ ] **No tests** — add smoke tests for each mode using recorded API fixtures (VCR.py / responses).
 - [ ] **Quota visibility** — YouTube Data API v3 has per-day quotas; surface current usage and warn before exhaustion.
-- [ ] **CLAUDE.md note about setlist.fm key is stale** — says hardcoded; it's actually env-var driven.
+- [x] **CLAUDE.md note about setlist.fm key is stale** — says hardcoded; it's actually env-var driven. _(fixed)_
+- [x] **Mode slot leak on duplicates** — if a candidate was already in the playlist, the slot was dropped silently; now we oversample and keep adding until the target count is hit. _(fixed)_
 
 ## Feature Backlog
 
 ### Festival / Event Sourcing
 - [ ] **Festival lineup scraper** — pull Download, Wacken, Coachella, Bonnaroo, Glastonbury, Reading/Leeds lineups directly from official sites / Music Festival Wizard / Songkick into `bands.txt`.
-- [ ] **Poster OCR mode** — accept an image path or URL, run OCR (Tesseract via `pytesseract`, Google Cloud Vision, or Anthropic vision API), fuzzy-match extracted text against MusicBrainz, and produce a cleaned band list.
+- [x] **Poster OCR mode** — accept an image path or URL, extract band names via Gemini vision, and drop them straight into the playlist pipeline. _(shipped: `poster_ocr.py` + Band Source option 4)_
+- [ ] **Poster OCR: fuzzy-verify against MusicBrainz / YTMusic** — correct likely misreads (`Sleept Token` → `Sleep Token`) automatically before handing the list to the playlist pipeline.
 - [ ] **Songkick integration** — "bands playing near me in the next 90 days" as a mode.
 - [ ] **Bandsintown API** — personal-calendar-driven band list using a user's tracked artists.
 

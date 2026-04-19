@@ -15,7 +15,7 @@ python bot.py
 No build step. No test suite. Install dependencies first:
 
 ```bash
-pip install ytmusicapi google-auth-oauthlib google-api-python-client requests
+pip install -r requirements.txt
 ```
 
 ## Architecture
@@ -53,9 +53,14 @@ Each mode is a distinct code path within `process_bands()`:
 
 `get_artist_genre()` calls MusicBrainz (rate-limited). `classify_genre()` maps raw tags to 5 buckets: Metal, Rock, Punk, Electronic, Pop/Other. `build_genre_clusters()` runs this for all bands before playlist creation begins.
 
+### Festival Poster OCR (Band Source option 4)
+
+`poster_ocr.py` extracts a band list from a festival poster image (local path or URL) using Google Gemini vision (`gemini-2.5-flash`). The user picks option 4 at the Band Source prompt, and the extracted list flows into the normal mode-selection pipeline. Useful when a festival site doesn't publish a clean lineup but the poster has every act.
+
 ## Key Files
 
-- `bot.py` — entire application
+- `bot.py` — CLI entry point and all playlist logic
+- `poster_ocr.py` — Gemini vision wrapper for festival-poster band extraction
 - `bands.txt` — input: one artist name per line
 - `token.json` — OAuth token cache (not committed)
 - `progress.json` — resume state (not committed)
@@ -63,6 +68,7 @@ Each mode is a distinct code path within `process_bands()`:
 
 ## API Credentials
 
-- **YouTube API**: Requires `client_secret_*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup.
+- **YouTube API**: Requires `client_secret*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup by `_find_client_secrets_file()`.
 - **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
 - **MusicBrainz** (Mode 9 only): No key required; uses public API with rate limiting.
+- **Gemini** (Band Source option 4 only): API key read from the `GEMINI_API_KEY` environment variable. Get a free key at https://aistudio.google.com/app/apikey.
