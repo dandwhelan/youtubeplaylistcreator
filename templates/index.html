@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Playlist Creator</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>🎸 YouTube Playlist Creator</h1>
+    <div class="status-bar" id="status-bar">
+      <span class="pill" id="pill-auth">YouTube: checking…</span>
+      <span class="pill" id="pill-setlist">setlist.fm</span>
+      <span class="pill" id="pill-gemini">Gemini</span>
+      <button id="btn-connect" class="hidden">Connect YouTube</button>
+    </div>
+  </header>
+
+  <div id="resume-banner" class="banner hidden">
+    <span id="resume-text"></span>
+    <button id="btn-resume">Resume</button>
+    <button id="btn-discard" class="secondary">Discard</button>
+  </div>
+
+  <main>
+    <!-- API keys & credentials -->
+    <section class="card">
+      <details id="keys-details">
+        <summary>🔑 API keys &amp; credentials</summary>
+        <div class="keys-body">
+          <div class="key-block">
+            <label>Google OAuth client secret — <span id="cs-status">checking…</span></label>
+            <p class="hint">Required to create playlists. Download from Google Cloud Console
+              → Credentials → your OAuth client (Desktop app), then upload it here.</p>
+            <div class="row">
+              <input type="file" id="cs-file" accept=".json,application/json">
+              <button id="btn-cs-upload">Upload</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>setlist.fm API key (Mode 8) — <span id="setlist-status">checking…</span></label>
+            <p class="hint">Free key from <a href="https://api.setlist.fm/docs/1.0/ui/index.html"
+              target="_blank" rel="noopener">api.setlist.fm</a>. Without it, Setlist Mode falls back to Top Popular.</p>
+            <div class="row">
+              <input type="password" id="key-setlist" placeholder="paste key…" autocomplete="off">
+              <button class="secondary key-clear" data-key="SETLIST_FM_API_KEY">Clear</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>Gemini API key (poster OCR) — <span id="gemini-status">checking…</span></label>
+            <p class="hint">Free key from <a href="https://aistudio.google.com/app/apikey"
+              target="_blank" rel="noopener">Google AI Studio</a>. Needed only for the festival-poster band source.</p>
+            <div class="row">
+              <input type="password" id="key-gemini" placeholder="paste key…" autocomplete="off">
+              <button class="secondary key-clear" data-key="GEMINI_API_KEY">Clear</button>
+            </div>
+          </div>
+
+          <div class="row">
+            <button id="btn-save-keys" class="primary">Save keys</button>
+            <span class="hint" id="keys-msg"></span>
+          </div>
+          <p class="hint">Keys are stored in <code>settings.json</code> next to the app (never committed to git).
+            Environment variables, if set, take precedence over saved keys.</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- Step 1: Bands -->
+    <section class="card">
+      <h2><span class="step">1</span> Bands</h2>
+      <div class="tabs" id="band-tabs">
+        <button class="tab active" data-tab="file">bands.txt</button>
+        <button class="tab" data-tab="upload">Upload file</button>
+        <button class="tab" data-tab="manual">Type manually</button>
+        <button class="tab" data-tab="poster">Festival poster (OCR)</button>
+      </div>
+
+      <div class="tab-panel" id="panel-upload" hidden>
+        <input type="file" id="upload-file" accept=".txt">
+      </div>
+
+      <div class="tab-panel" id="panel-poster" hidden>
+        <p class="hint">Upload a poster image or paste its URL — Gemini extracts the lineup.</p>
+        <input type="file" id="poster-file" accept="image/*">
+        <div class="row">
+          <input type="url" id="poster-url" placeholder="https://…/poster.jpg">
+          <button id="btn-poster">Extract bands</button>
+        </div>
+        <p class="hint" id="poster-status"></p>
+      </div>
+
+      <label for="bands-text">Band list (one per line) — <span id="band-count">0</span> bands</label>
+      <textarea id="bands-text" rows="10" spellcheck="false"
+                placeholder="Metallica&#10;Iron Maiden&#10;…"></textarea>
+      <div class="row">
+        <button id="btn-reload" class="secondary">Reload bands.txt</button>
+        <button id="btn-save" class="secondary">Save to bands.txt</button>
+      </div>
+    </section>
+
+    <!-- Step 2: Mode -->
+    <section class="card">
+      <h2><span class="step">2</span> Playlist mode</h2>
+      <div id="mode-list" class="mode-list"></div>
+
+      <div id="mode-settings">
+        <div class="setting hidden" id="setting-count">
+          <label>Songs per artist</label>
+          <input type="number" id="opt-count" value="3" min="1" max="20">
+        </div>
+        <div class="setting hidden" id="setting-albums">
+          <label>Albums per artist</label>
+          <input type="number" id="opt-albums" value="5" min="1" max="20">
+        </div>
+        <div class="setting hidden" id="setting-era">
+          <label>Era</label>
+          <input type="number" id="opt-start-year" placeholder="1990" min="1900" max="2100">
+          <span>to</span>
+          <input type="number" id="opt-end-year" placeholder="1999" min="1900" max="2100">
+        </div>
+        <div class="setting hidden" id="setting-trackmode">
+          <label>Track mode for each genre playlist</label>
+          <select id="opt-trackmode"></select>
+        </div>
+        <div class="setting">
+          <label>Privacy</label>
+          <select id="opt-privacy">
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private</option>
+          </select>
+        </div>
+        <div class="setting" id="setting-name">
+          <label>Playlist name</label>
+          <input type="text" id="opt-name" placeholder="(default: mode name)">
+        </div>
+      </div>
+    </section>
+
+    <!-- Genre cluster preview (mode 9 only) -->
+    <section class="card hidden" id="cluster-card">
+      <h2><span class="step">3</span> Genre groups</h2>
+      <p class="hint">Genre lookup uses MusicBrainz at 1 request/second — expect ~1s per band.</p>
+      <button id="btn-cluster">Preview genre groups</button>
+      <div id="cluster-results"></div>
+    </section>
+
+    <!-- Step 3/4: Run -->
+    <section class="card">
+      <h2><span class="step" id="run-step">3</span> Create playlist</h2>
+      <div class="row">
+        <button id="btn-run" class="primary">▶ Create playlist</button>
+        <button id="btn-cancel" class="danger hidden">Cancel</button>
+      </div>
+
+      <div id="progress-wrap" class="hidden">
+        <div class="progress-outer"><div class="progress-inner" id="progress-bar"></div></div>
+        <p id="progress-text"></p>
+      </div>
+
+      <div id="playlist-links"></div>
+      <pre id="log" class="hidden"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

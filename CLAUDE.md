@@ -8,8 +8,16 @@ A Python CLI tool that creates curated YouTube Music playlists from a list of ba
 
 ## Running the App
 
+CLI:
+
 ```bash
 python bot.py
+```
+
+Web UI (same features in the browser at http://localhost:5000):
+
+```bash
+python app.py
 ```
 
 No build step. No test suite. Install dependencies first:
@@ -57,9 +65,15 @@ Each mode is a distinct code path within `process_bands()`:
 
 `poster_ocr.py` extracts a band list from a festival poster image (local path or URL) using Google Gemini vision (`gemini-2.5-flash`). The user picks option 4 at the Band Source prompt, and the extracted list flows into the normal mode-selection pipeline. Useful when a festival site doesn't publish a clean lineup but the poster has every act.
 
+### Web Interface
+
+`app.py` is a Flask app that wraps the same functions in `bot.py` — no playlist logic is duplicated. It exposes a JSON API (`/api/run`, `/api/cluster`, `/api/resume`, `/api/poster`, `/api/bands`, `/api/job`, …) consumed by a single-page UI in `templates/index.html` + `static/`. Playlist runs execute in a background thread (one job at a time, tracked in a module-level `_job` dict); the frontend polls `/api/job` for live progress, and cancel/resume reuse the CLI's `progress.json` mechanism via the `progress_callback` hook in `process_bands()`. OAuth uses a browser redirect flow (`/api/auth/start` → Google consent → `/oauth2callback`) instead of the CLI's `run_local_server`, writing the same `token.json`.
+
 ## Key Files
 
 - `bot.py` — CLI entry point and all playlist logic
+- `app.py` — Flask web UI (wraps `bot.py`; run with `python app.py`)
+- `templates/index.html`, `static/app.js`, `static/style.css` — web frontend
 - `poster_ocr.py` — Gemini vision wrapper for festival-poster band extraction
 - `bands.txt` — input: one artist name per line
 - `token.json` — OAuth token cache (not committed)
@@ -69,6 +83,10 @@ Each mode is a distinct code path within `process_bands()`:
 ## API Credentials
 
 - **YouTube API**: Requires `client_secret*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup by `_find_client_secrets_file()`.
-- **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
+- **setlist.fm** (Mode 8 only): API key from `SETLIST_FM_API_KEY` env var or `settings.json` (see below). If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
 - **MusicBrainz** (Mode 9 only): No key required; uses public API with rate limiting.
-- **Gemini** (Band Source option 4 only): API key read from the `GEMINI_API_KEY` environment variable. Get a free key at https://aistudio.google.com/app/apikey.
+- **Gemini** (Band Source option 4 only): API key from `GEMINI_API_KEY` env var or `settings.json`. Get a free key at https://aistudio.google.com/app/apikey.
+
+### Key storage (`config.py`)
+
+`config.get_key(name)` resolves API keys: environment variable first, then `settings.json` (written by the web UI's "API keys & credentials" panel, gitignored). The web UI can also upload the Google `client_secret.json` via `/api/client_secret`. Keys are looked up at call time, so keys saved in the UI apply without restarting.
