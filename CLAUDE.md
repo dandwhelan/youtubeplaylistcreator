@@ -8,8 +8,16 @@ A Python CLI tool that creates curated YouTube Music playlists from a list of ba
 
 ## Running the App
 
+CLI:
+
 ```bash
 python bot.py
+```
+
+Web UI (same features in the browser at http://localhost:5000):
+
+```bash
+python app.py
 ```
 
 No build step. No test suite. Install dependencies first:
@@ -57,9 +65,15 @@ Each mode is a distinct code path within `process_bands()`:
 
 `poster_ocr.py` extracts a band list from a festival poster image (local path or URL) using Google Gemini vision (`gemini-2.5-flash`). The user picks option 4 at the Band Source prompt, and the extracted list flows into the normal mode-selection pipeline. Useful when a festival site doesn't publish a clean lineup but the poster has every act.
 
+### Web Interface
+
+`app.py` is a Flask app that wraps the same functions in `bot.py` — no playlist logic is duplicated. It exposes a JSON API (`/api/run`, `/api/cluster`, `/api/resume`, `/api/poster`, `/api/bands`, `/api/job`, …) consumed by a single-page UI in `templates/index.html` + `static/`. Playlist runs execute in a background thread (one job at a time, tracked in a module-level `_job` dict); the frontend polls `/api/job` for live progress, and cancel/resume reuse the CLI's `progress.json` mechanism via the `progress_callback` hook in `process_bands()`. OAuth uses a browser redirect flow (`/api/auth/start` → Google consent → `/oauth2callback`) instead of the CLI's `run_local_server`, writing the same `token.json`.
+
 ## Key Files
 
 - `bot.py` — CLI entry point and all playlist logic
+- `app.py` — Flask web UI (wraps `bot.py`; run with `python app.py`)
+- `templates/index.html`, `static/app.js`, `static/style.css` — web frontend
 - `poster_ocr.py` — Gemini vision wrapper for festival-poster band extraction
 - `bands.txt` — input: one artist name per line
 - `token.json` — OAuth token cache (not committed)
