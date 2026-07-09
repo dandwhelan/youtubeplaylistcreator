@@ -183,6 +183,26 @@ button.secondary { font-size: 13px; }
   word-break: break-all;
 }
 
+details > summary {
+  cursor: pointer;
+  font-size: 17px;
+  font-weight: 600;
+  list-style-position: outside;
+}
+.keys-body { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.key-block { border-top: 1px solid var(--card-border); padding-top: 10px; }
+.key-block:first-child { border-top: none; padding-top: 0; }
+.key-block input[type="password"] { flex: 1; min-width: 220px; }
+.keys-body a { color: var(--ok); }
+.keys-body code {
+  background: #0c0e12;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.status-ok { color: var(--ok); }
+.status-warn { color: var(--warn); }
+
 #log {
   margin-top: 14px;
   background: #0c0e12;

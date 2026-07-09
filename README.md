@@ -31,6 +31,7 @@ Then open **http://localhost:5000**. The web UI gives you:
 - **All 9 playlist modes** with their settings (songs per artist, albums, era years, playlist privacy)
 - **Band sources**: edit `bands.txt` in the browser, upload a text file, type bands manually, or scan a festival poster with Gemini OCR
 - **One-click Google sign-in** — click "Connect YouTube" and approve in the browser (uses the same `client_secret*.json` and `token.json` as the CLI)
+- **API key manager** — the "🔑 API keys & credentials" panel lets you upload your Google `client_secret.json` and save your setlist.fm and Gemini keys right in the browser (stored locally in `settings.json`, never committed; environment variables still take precedence)
 - **Live progress** — progress bar, per-band log, and playlist links as they're created
 - **Cancel & resume** — stop a run mid-way and pick it up later (shared `progress.json` with the CLI)
 - **Genre Cluster preview** — see the genre groups and name each playlist before anything is created

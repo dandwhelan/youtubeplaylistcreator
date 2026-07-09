@@ -24,6 +24,51 @@
   </div>
 
   <main>
+    <!-- API keys & credentials -->
+    <section class="card">
+      <details id="keys-details">
+        <summary>🔑 API keys &amp; credentials</summary>
+        <div class="keys-body">
+          <div class="key-block">
+            <label>Google OAuth client secret — <span id="cs-status">checking…</span></label>
+            <p class="hint">Required to create playlists. Download from Google Cloud Console
+              → Credentials → your OAuth client (Desktop app), then upload it here.</p>
+            <div class="row">
+              <input type="file" id="cs-file" accept=".json,application/json">
+              <button id="btn-cs-upload">Upload</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>setlist.fm API key (Mode 8) — <span id="setlist-status">checking…</span></label>
+            <p class="hint">Free key from <a href="https://api.setlist.fm/docs/1.0/ui/index.html"
+              target="_blank" rel="noopener">api.setlist.fm</a>. Without it, Setlist Mode falls back to Top Popular.</p>
+            <div class="row">
+              <input type="password" id="key-setlist" placeholder="paste key…" autocomplete="off">
+              <button class="secondary key-clear" data-key="SETLIST_FM_API_KEY">Clear</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>Gemini API key (poster OCR) — <span id="gemini-status">checking…</span></label>
+            <p class="hint">Free key from <a href="https://aistudio.google.com/app/apikey"
+              target="_blank" rel="noopener">Google AI Studio</a>. Needed only for the festival-poster band source.</p>
+            <div class="row">
+              <input type="password" id="key-gemini" placeholder="paste key…" autocomplete="off">
+              <button class="secondary key-clear" data-key="GEMINI_API_KEY">Clear</button>
+            </div>
+          </div>
+
+          <div class="row">
+            <button id="btn-save-keys" class="primary">Save keys</button>
+            <span class="hint" id="keys-msg"></span>
+          </div>
+          <p class="hint">Keys are stored in <code>settings.json</code> next to the app (never committed to git).
+            Environment variables, if set, take precedence over saved keys.</p>
+        </div>
+      </details>
+    </section>
+
     <!-- Step 1: Bands -->
     <section class="card">
       <h2><span class="step">1</span> Bands</h2>

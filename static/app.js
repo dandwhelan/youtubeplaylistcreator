@@ -101,6 +101,92 @@ $('btn-discard').onclick = async () => {
 };
 
 // ---------------------------------------------------------------------------
+// API keys & credentials
+// ---------------------------------------------------------------------------
+
+function keyStatusText(info) {
+  if (!info.set) return ['not set', 'status-warn'];
+  if (info.source === 'env') return ['set via environment variable', 'status-ok'];
+  return ['saved', 'status-ok'];
+}
+
+async function loadKeys() {
+  let data;
+  try {
+    data = await api('/api/keys');
+  } catch (e) {
+    return;
+  }
+
+  const cs = $('cs-status');
+  if (data.client_secret.present) {
+    cs.textContent = `found (${data.client_secret.file})`;
+    cs.className = 'status-ok';
+  } else {
+    cs.textContent = 'missing';
+    cs.className = 'status-warn';
+    $('keys-details').open = true; // can't do anything without it — show the panel
+  }
+
+  const [setlistText, setlistClass] = keyStatusText(data.keys.SETLIST_FM_API_KEY);
+  $('setlist-status').textContent = setlistText;
+  $('setlist-status').className = setlistClass;
+  const [geminiText, geminiClass] = keyStatusText(data.keys.GEMINI_API_KEY);
+  $('gemini-status').textContent = geminiText;
+  $('gemini-status').className = geminiClass;
+}
+
+$('btn-save-keys').onclick = async () => {
+  const body = {};
+  if ($('key-setlist').value.trim()) body.SETLIST_FM_API_KEY = $('key-setlist').value.trim();
+  if ($('key-gemini').value.trim()) body.GEMINI_API_KEY = $('key-gemini').value.trim();
+  if (!Object.keys(body).length) {
+    $('keys-msg').textContent = 'Nothing to save — paste a key first.';
+    return;
+  }
+  try {
+    await postJSON('/api/keys', body);
+    $('key-setlist').value = '';
+    $('key-gemini').value = '';
+    $('keys-msg').textContent = 'Saved.';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    $('keys-msg').textContent = e.message;
+  }
+};
+
+document.querySelectorAll('.key-clear').forEach((btn) => {
+  btn.onclick = async () => {
+    if (!confirm(`Remove the saved ${btn.dataset.key}?`)) return;
+    try {
+      await postJSON('/api/keys', { [btn.dataset.key]: '' });
+      $('keys-msg').textContent = 'Cleared.';
+      loadKeys();
+      loadStatus();
+    } catch (e) {
+      $('keys-msg').textContent = e.message;
+    }
+  };
+});
+
+$('btn-cs-upload').onclick = async () => {
+  const file = $('cs-file').files[0];
+  if (!file) return alert('Choose your client_secret*.json file first.');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const data = await api('/api/client_secret', { method: 'POST', body: form });
+    $('keys-msg').textContent = `Saved ${data.saved} — you can now Connect YouTube.`;
+    $('cs-file').value = '';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    alert(e.message);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Bands
 // ---------------------------------------------------------------------------
 
@@ -417,3 +503,4 @@ async function pollJob() {
 loadStatus();
 loadModes();
 loadBandsFile();
+loadKeys();

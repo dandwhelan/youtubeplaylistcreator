@@ -12,6 +12,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from config import get_key
+
 
 def _find_client_secrets_file():
     """Find the OAuth client secrets file via glob so users can keep Google's
@@ -28,8 +30,11 @@ TOKEN_FILE = 'token.json'
 PROGRESS_FILE = 'progress.json'
 PLAYLIST_PRIVACY = 'public'
 
-# Set this env var to enable Setlist Mode (free key from https://api.setlist.fm)
-SETLIST_FM_API_KEY = os.environ.get('SETLIST_FM_API_KEY', '')
+# Setlist Mode needs a free key from https://api.setlist.fm — set the
+# SETLIST_FM_API_KEY env var, or save it via the web UI's "API keys" panel
+# (stored in settings.json; env var wins if both are set). Looked up at call
+# time via config.get_key() so keys saved while the app is running apply
+# immediately.
 
 # --- API SETUP ---
 SCOPES = ['https://www.googleapis.com/auth/youtube']
@@ -444,13 +449,14 @@ def get_setlist_tracks(band_name, count=3):
     """Mode 8: Most commonly played live songs (via setlist.fm API)."""
     print(f"  Searching setlist data: {band_name}")
 
-    if not SETLIST_FM_API_KEY:
+    api_key = get_key('SETLIST_FM_API_KEY')
+    if not api_key:
         print("    SETLIST_FM_API_KEY not set - falling back to top popular")
         return get_top_popular(band_name, count)
 
     headers = {
         'Accept': 'application/json',
-        'x-api-key': SETLIST_FM_API_KEY,
+        'x-api-key': api_key,
     }
 
     # Search for the artist on setlist.fm
@@ -631,7 +637,7 @@ def show_menu():
     print("Choose your playlist mode:\n")
     for key, mode in ALL_MODES.items():
         label = mode['name']
-        if key == '8' and not SETLIST_FM_API_KEY:
+        if key == '8' and not get_key('SETLIST_FM_API_KEY'):
             label += '  [needs SETLIST_FM_API_KEY env var]'
         print(f"  {key}. {label}")
         print(f"     {mode['description']}\n")

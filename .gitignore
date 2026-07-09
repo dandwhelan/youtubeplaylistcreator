@@ -5,3 +5,4 @@ token.json
 client_secret*.json
 playlist_log.txt
 progress.json
+settings.json
