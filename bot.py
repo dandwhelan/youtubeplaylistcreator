@@ -101,12 +101,12 @@ def get_youtube_service():
     return build('youtube', 'v3', credentials=creds)
 
 
-def create_playlist(youtube, name, description):
+def create_playlist(youtube, name, description, privacy=PLAYLIST_PRIVACY):
     request = youtube.playlists().insert(
         part="snippet,status",
         body={
             "snippet": {"title": name, "description": description},
-            "status": {"privacyStatus": PLAYLIST_PRIVACY}
+            "status": {"privacyStatus": privacy}
         }
     )
     return request.execute()['id']
@@ -810,11 +810,15 @@ def call_track_mode(choice, settings, band_name):
 
 
 def process_bands(youtube, playlist_id, bands, choice, settings,
-                  log_entries, seen_videos, start_index=0):
+                  log_entries, seen_videos, start_index=0,
+                  progress_callback=None):
     """Process a list of bands, adding tracks to the playlist.
 
     `seen_videos` is a set of already-added video IDs; mutated in place.
     Supports resuming from start_index. Saves progress after each band.
+    `progress_callback(done, total, band)` is invoked after each band; if it
+    returns False the run stops early (progress is already saved, so it can
+    be resumed).
     Returns the number of duplicates skipped.
     """
     dupes_skipped = 0
@@ -854,6 +858,9 @@ def process_bands(youtube, playlist_id, bands, choice, settings,
             'added_video_ids': list(seen_videos),
             'log_entries': log_entries,
         })
+
+        if progress_callback and progress_callback(i + 1, len(bands), band) is False:
+            break
 
     return dupes_skipped
 
