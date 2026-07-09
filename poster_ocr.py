@@ -76,13 +76,14 @@ def extract_bands_from_poster(image_source, api_key=None):
     image_source: local file path or http(s) URL.
     Raises RuntimeError with a user-friendly message on setup issues.
     """
-    api_key = api_key or os.environ.get('GEMINI_API_KEY', '')
+    from config import get_key
+    api_key = api_key or get_key('GEMINI_API_KEY')
     if not api_key:
         raise RuntimeError(
             "GEMINI_API_KEY is not set. Get a free key at "
-            "https://aistudio.google.com/app/apikey and run "
-            "'set GEMINI_API_KEY=...' (Windows) or "
-            "'export GEMINI_API_KEY=...' (macOS/Linux) before launching."
+            "https://aistudio.google.com/app/apikey, then save it in the web "
+            "UI's 'API keys' panel, or set the GEMINI_API_KEY environment "
+            "variable before launching."
         )
 
     try:

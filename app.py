@@ -9,6 +9,7 @@ all 9 playlist modes, band sources (bands.txt, file upload, manual entry,
 festival-poster OCR), genre-cluster preview, live progress, cancel and
 resume.
 """
+import json
 import os
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 import bot
+import config
 
 app = Flask(__name__)
 
@@ -137,6 +139,68 @@ def oauth2callback():
 
 
 # ---------------------------------------------------------------------------
+# API keys & credentials
+# ---------------------------------------------------------------------------
+
+@app.route('/api/keys', methods=['GET'])
+def get_keys():
+    keys = {}
+    for name in config.MANAGED_KEYS:
+        keys[name] = {
+            'set': bool(config.get_key(name)),
+            'source': config.key_source(name),
+        }
+    has_secret = os.path.exists(bot.YOUTUBE_CLIENT_SECRETS_FILE)
+    return jsonify({
+        'keys': keys,
+        'client_secret': {
+            'present': has_secret,
+            'file': bot.YOUTUBE_CLIENT_SECRETS_FILE if has_secret else None,
+        },
+    })
+
+
+@app.route('/api/keys', methods=['POST'])
+def save_keys():
+    data = request.get_json(silent=True) or {}
+    changed = []
+    for name in config.MANAGED_KEYS:
+        if name in data:
+            config.set_key(name, str(data[name] or ''))
+            changed.append(name)
+    if not changed:
+        return jsonify({'error': 'No keys given.'}), 400
+    return jsonify({'saved': changed})
+
+
+@app.route('/api/client_secret', methods=['POST'])
+def upload_client_secret():
+    upload = request.files.get('file')
+    if not upload or not upload.filename:
+        return jsonify({'error': 'No file uploaded.'}), 400
+
+    raw = upload.read()
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return jsonify({'error': 'Not a valid JSON file.'}), 400
+    if not any(k in parsed for k in ('installed', 'web')):
+        return jsonify({'error': 'This does not look like a Google OAuth client '
+                                 'secret (missing "installed"/"web" section). '
+                                 'Download it from Google Cloud Console → '
+                                 'Credentials → your OAuth client.'}), 400
+
+    # Overwrite the existing secrets file if there is one, else create the
+    # default name and point bot at it.
+    target = bot.YOUTUBE_CLIENT_SECRETS_FILE \
+        if os.path.exists(bot.YOUTUBE_CLIENT_SECRETS_FILE) else 'client_secret.json'
+    with open(target, 'wb') as f:
+        f.write(raw)
+    bot.YOUTUBE_CLIENT_SECRETS_FILE = target
+    return jsonify({'saved': target})
+
+
+# ---------------------------------------------------------------------------
 # Status, modes, bands
 # ---------------------------------------------------------------------------
 
@@ -158,8 +222,8 @@ def status():
     return jsonify({
         'authenticated': _load_credentials() is not None,
         'has_client_secret': os.path.exists(bot.YOUTUBE_CLIENT_SECRETS_FILE),
-        'setlist_key': bool(bot.SETLIST_FM_API_KEY),
-        'gemini_key': bool(os.environ.get('GEMINI_API_KEY', '')),
+        'setlist_key': bool(config.get_key('SETLIST_FM_API_KEY')),
+        'gemini_key': bool(config.get_key('GEMINI_API_KEY')),
         'bands_file_exists': os.path.exists(bot.DEFAULT_BANDS_FILE),
         'progress': progress_info,
         'job_state': _job_snapshot().get('state', 'idle'),

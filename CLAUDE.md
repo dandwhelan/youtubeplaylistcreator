@@ -83,6 +83,10 @@ Each mode is a distinct code path within `process_bands()`:
 ## API Credentials
 
 - **YouTube API**: Requires `client_secret*.json` from Google Cloud Console with OAuth 2.0 credentials and the YouTube Data API v3 enabled. The filename pattern is matched via glob at startup by `_find_client_secrets_file()`.
-- **setlist.fm** (Mode 8 only): API key read from the `SETLIST_FM_API_KEY` environment variable. If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
+- **setlist.fm** (Mode 8 only): API key from `SETLIST_FM_API_KEY` env var or `settings.json` (see below). If unset, Mode 8 falls back to Mode 1. Calls are rate-limited via `_setlist_get()`.
 - **MusicBrainz** (Mode 9 only): No key required; uses public API with rate limiting.
-- **Gemini** (Band Source option 4 only): API key read from the `GEMINI_API_KEY` environment variable. Get a free key at https://aistudio.google.com/app/apikey.
+- **Gemini** (Band Source option 4 only): API key from `GEMINI_API_KEY` env var or `settings.json`. Get a free key at https://aistudio.google.com/app/apikey.
+
+### Key storage (`config.py`)
+
+`config.get_key(name)` resolves API keys: environment variable first, then `settings.json` (written by the web UI's "API keys & credentials" panel, gitignored). The web UI can also upload the Google `client_secret.json` via `/api/client_secret`. Keys are looked up at call time, so keys saved in the UI apply without restarting.
