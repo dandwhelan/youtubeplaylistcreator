@@ -4,6 +4,49 @@ This Python script reads a text file full of band names, finds songs for each ar
 
 It's completely free to use and bypasses Spotify's new Premium-only developer API restrictions.
 
+## Quick start: from an empty folder (Windows)
+
+These are the commands to get the project from GitHub onto a PC and running, starting with nothing. Run them in PowerShell.
+
+**1. Install Git and Python** (skip any you already have; reopen PowerShell afterwards):
+```powershell
+winget install Git.Git
+winget install Python.Python.3.13
+```
+
+**2. Make a folder and download the project into it:**
+```powershell
+mkdir C:\Users\$env:USERNAME\Project\youtubeplaylist
+cd C:\Users\$env:USERNAME\Project\youtubeplaylist
+git clone https://github.com/dandwhelan/youtubeplaylistcreator.git .
+```
+The `.` at the end puts the files straight into the folder you are in (it must be empty). Leave it off and Git makes a `youtubeplaylistcreator` subfolder instead.
+
+**3. Install the Python libraries:**
+```powershell
+py -m pip install -r requirements.txt
+```
+
+**4. Add your Google key file.** Copy your `client_secret....json` file into the folder. If you do not have one yet, follow Steps 1 to 4 further down this page (one-time setup). This file is private: Git is set to ignore it, so it is never uploaded.
+
+**5. Put your bands in `bands.txt`**, one per line, then start it:
+```powershell
+py bot.py
+```
+or, for the web page version at http://localhost:5000:
+```powershell
+py app.py
+```
+The first run opens your browser to sign in to Google.
+
+**Getting updates later** (run inside the same folder):
+```powershell
+git pull
+py -m pip install -U -r requirements.txt
+```
+
+**Files that stay on your PC only** (ignored by Git, safe to delete to start fresh): `token.json` (saved sign-in), `progress.json` (unfinished run), `playlist_log.txt` (last run's log), `settings.json` (keys saved from the web page).
+
 ## Playlist Modes
 
 | Mode | Description |
