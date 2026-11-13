@@ -20,7 +20,16 @@ It's completely free to use and bypasses Spotify's new Premium-only developer AP
 
 ### Extra Features
 - **Duplicate detection** - automatically skips songs already in the playlist
-- **Resume support** - if the script crashes mid-run, restart it and pick up where you left off
+- **Resume support** - progress is saved after every track. If the script stops (crash, Ctrl+C, or the daily quota below), restart it and answer `y` to carry on from the same band, in every mode including Genre Cluster
+- **Visibility prompt** - choose private (default), unlisted or public for each run
+- **Artist match check** - a band with no exact name match on YouTube Music is still added, but listed at the end of `playlist_log.txt` so you can check it by hand
+
+### Daily quota: about 199 tracks per day
+A default Google Cloud project gets 10,000 YouTube Data API units per day and each track added costs 50. That is about 199 tracks a day (100 bands at 3 songs each is 300). When the quota runs out the script stops, keeps its progress, and tells you to run it again after the quota resets (midnight Pacific time). Use **One Hit Sampler** if you want a long band list finished in one day.
+
+### Coming back after a while
+- Update the YouTube Music library first, as old versions break: `pip install -U ytmusicapi`
+- A sign-in saved more than 7 days ago has expired (Google "Testing" apps). The script notices and opens the browser to sign in again.
 - **Multi-festival support** - use any bands file, or enter bands manually
 - **Configurable** - choose how many songs per artist, how many albums to scan, custom playlist names
 
@@ -110,9 +119,7 @@ Now you need the actual "key" that lets your Python script identify itself as th
 6. A popup will appear saying "OAuth client created." 
 7. Click the **DOWNLOAD JSON** button (it looks like a down arrow with a bracket under it). 
 8. Move that downloaded file into the exact same folder as your `bot.py` script.
-9. **Rename the file** to exactly `client_secret.json`. 
-
-*(Be sure your script looks for this exact filename. If you named it something else, you will need to open `bot.py` and update the `YOUTUBE_CLIENT_SECRETS_FILE` variable!)*
+9. Leave Google's file name as it is, or rename it to `client_secret.json`: the script picks up any file named `client_secret*.json` in its folder.
 
 ## Step 5: Giving the Script its First Test Run
 You are ready to go! Ensure `bands.txt` contains your list of bands, one per line.
