@@ -27,7 +27,7 @@ The `.` at the end puts the files straight into the folder you are in (it must b
 py -m pip install -r requirements.txt
 ```
 
-**4. Add your Google key file.** Copy your `client_secret....json` file into the folder. If you do not have one yet, follow Steps 1 to 4 further down this page (one-time setup). This file is private: Git is set to ignore it, so it is never uploaded.
+**4. Add your Google key file.** Copy your `client_secret....json` file into the folder. If you do not have one yet, see [Getting the Google key file](#getting-the-google-key-file-client_secretjson) further down this page (one-time setup, direct links included). In the web page, the header shows **YouTube: Google key file missing** until this is done; click that badge for the same steps and an upload button. The setlist.fm and Gemini badges are optional extras and can be left unset. This file is private: Git is set to ignore it, so it is never uploaded.
 
 **5. Put your bands in `bands.txt`**, one per line, then start it:
 ```powershell
@@ -132,6 +132,23 @@ export GEMINI_API_KEY="your-key-here"
 python bot.py
 ```
 The `google-genai` package (installed via `requirements.txt`) is what talks to Gemini.
+
+## Getting the Google key file (`client_secret....json`)
+The script needs one private key file from Google before it can create playlists on your account. It is free and you only do this once. Steps 1 to 4 below are the full walkthrough; these direct links jump to each page (sign in with the Google account you use for YouTube Music, and check the right project is selected at the top of each page):
+
+| Step | Direct link | What to do there |
+|------|-------------|------------------|
+| 1 | https://console.cloud.google.com/projectcreate | Create a project (any name) |
+| 2 | https://console.cloud.google.com/apis/library/youtube.googleapis.com | Click **Enable** on YouTube Data API v3 |
+| 3 | https://console.cloud.google.com/auth/overview | Set up the OAuth consent screen: any app name, your email, audience **External** |
+| 3 | https://console.cloud.google.com/auth/audience | Add your own Google email under **Test users** |
+| 4 | https://console.cloud.google.com/auth/clients | Create a client, type **Desktop app**, then **Download JSON** |
+
+Google only offers the JSON download when the client is created. If you lose the file, create another client the same way.
+
+Then either copy the downloaded file into the project folder, or in the web page open **API keys & credentials** and upload it there.
+
+Google renames these console pages from time to time. If a link or a menu name below does not match what you see, look for **Google Auth Platform** or **APIs & Services** in the left-hand menu.
 
 ## Step 1: Creating a Google Cloud Console Project
 The `ytmusicapi` handles all the song searching without needing an API key. However, to actually **create a playlist** on your personal YouTube account and add songs to it, the script needs to use the official Google YouTube Data API.

@@ -55,14 +55,14 @@ async function loadStatus() {
   } else {
     authPill.textContent = s.has_client_secret
       ? 'YouTube: not connected'
-      : 'YouTube: client_secret*.json missing';
+      : 'YouTube: Google key file missing (click for steps)';
     authPill.className = 'pill bad';
     $('btn-connect').classList.toggle('hidden', !s.has_client_secret);
   }
 
-  $('pill-setlist').textContent = s.setlist_key ? 'setlist.fm ✓' : 'setlist.fm key not set';
+  $('pill-setlist').textContent = s.setlist_key ? 'setlist.fm ✓' : 'setlist.fm key not set (optional)';
   $('pill-setlist').className = 'pill ' + (s.setlist_key ? 'ok' : '');
-  $('pill-gemini').textContent = s.gemini_key ? 'Gemini ✓' : 'Gemini key not set';
+  $('pill-gemini').textContent = s.gemini_key ? 'Gemini ✓' : 'Gemini key not set (optional)';
   $('pill-gemini').className = 'pill ' + (s.gemini_key ? 'ok' : '');
 
   if (s.progress && s.job_state !== 'running') {
@@ -511,3 +511,12 @@ loadStatus();
 loadModes();
 loadBandsFile();
 loadKeys();
+
+// Status badges in the header open the setup panel, which has the steps
+// and links for each key.
+['pill-auth', 'pill-setlist', 'pill-gemini'].forEach((id) => {
+  $(id).onclick = () => {
+    $('keys-details').open = true;
+    $('keys-details').scrollIntoView({ behavior: 'smooth' });
+  };
+});
