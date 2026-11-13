@@ -10,9 +10,9 @@
   <header>
     <h1>🎸 YouTube Playlist Creator</h1>
     <div class="status-bar" id="status-bar">
-      <span class="pill" id="pill-auth">YouTube: checking…</span>
-      <span class="pill" id="pill-setlist">setlist.fm</span>
-      <span class="pill" id="pill-gemini">Gemini</span>
+      <span class="pill" id="pill-auth" title="Click for setup steps">YouTube: checking…</span>
+      <span class="pill" id="pill-setlist" title="Optional. Click for setup steps">setlist.fm</span>
+      <span class="pill" id="pill-gemini" title="Optional. Click for setup steps">Gemini</span>
       <button id="btn-connect" class="hidden">Connect YouTube</button>
     </div>
   </header>
@@ -31,8 +31,31 @@
         <div class="keys-body">
           <div class="key-block">
             <label>Google OAuth client secret — <span id="cs-status">checking…</span></label>
-            <p class="hint">Required to create playlists. Download from Google Cloud Console
-              → Credentials → your OAuth client (Desktop app), then upload it here.</p>
+            <p class="hint">Required to create playlists. It is a free key file from Google that lets
+              this app add playlists to your own account. One-time setup, about 5 minutes. Sign in to
+              Google with the account you use for YouTube Music, then:</p>
+            <ol class="hint steps">
+              <li><a href="https://console.cloud.google.com/projectcreate" target="_blank"
+                rel="noopener">Create a Google Cloud project</a> (any name, e.g. "Playlist Bot").</li>
+              <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com"
+                target="_blank" rel="noopener">Enable "YouTube Data API v3"</a> for that project.</li>
+              <li><a href="https://console.cloud.google.com/auth/overview" target="_blank"
+                rel="noopener">Set up the OAuth consent screen</a>: any app name, your own email,
+                audience <b>External</b>.</li>
+              <li><a href="https://console.cloud.google.com/auth/audience" target="_blank"
+                rel="noopener">Add yourself as a test user</a> (your YouTube Google email).
+                Without this Google blocks the sign-in.</li>
+              <li><a href="https://console.cloud.google.com/auth/clients" target="_blank"
+                rel="noopener">Create an OAuth client</a>, application type <b>Desktop app</b>,
+                and click <b>Download JSON</b> straight away (Google only offers the file when
+                the client is created).</li>
+              <li>Upload that <code>client_secret….json</code> file below, then click
+                <b>Connect YouTube</b> at the top right and approve the sign-in. Google shows
+                "Google hasn't verified this app": click <b>Advanced</b>, then
+                <b>Go to … (unsafe)</b>. That is normal for a personal app.</li>
+            </ol>
+            <p class="hint">If a link opens the wrong project, pick yours in the project menu at the
+              top of the Google page. Full walkthrough: README, Steps 1 to 4.</p>
             <div class="row">
               <input type="file" id="cs-file" accept=".json,application/json">
               <button id="btn-cs-upload">Upload</button>

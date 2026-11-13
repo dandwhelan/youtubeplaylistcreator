@@ -215,3 +215,7 @@ details > summary {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.pill { cursor: pointer; }
+.steps { padding-left: 20px; }
+.steps li { margin: 5px 0; }
