@@ -24,7 +24,7 @@ The entire application lives in `bot.py` (monolithic, ~32KB). The flow is:
 
 1. **Auth** — `get_youtube_service()` does OAuth2 via Google, caches tokens in `token.json`
 2. **Input** — user picks a mode (1–9) and settings; band list loaded from `bands.txt`
-3. **Search** — `find_artist()` + `ytmusicapi` find tracks per band
+3. **Search** — `get_artist()` + `ytmusicapi` find tracks per band
 4. **Dedup** — global `added_video_ids` set prevents duplicate songs across the playlist
 5. **Add to playlist** — YouTube Data API v3 inserts video IDs
 6. **Resume** — `save_progress()` / `load_progress()` persist state to `progress.json` so a crashed run can be resumed

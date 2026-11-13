@@ -6,6 +6,7 @@ import time
 import requests
 from collections import Counter
 from ytmusicapi import YTMusic
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -26,7 +27,7 @@ DEFAULT_BANDS_FILE = 'bands.txt'
 LOG_FILE = 'playlist_log.txt'
 TOKEN_FILE = 'token.json'
 PROGRESS_FILE = 'progress.json'
-PLAYLIST_PRIVACY = 'public'
+PLAYLIST_PRIVACY = 'private'  # default offered at the visibility prompt
 
 # Set this env var to enable Setlist Mode (free key from https://api.setlist.fm)
 SETLIST_FM_API_KEY = os.environ.get('SETLIST_FM_API_KEY', '')
@@ -91,8 +92,15 @@ def get_youtube_service():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                # A Google project left in "Testing" mode issues refresh
+                # tokens that die after 7 days, so a saved token from an
+                # earlier festival is normally dead. Sign in again.
+                print("Saved sign-in has expired - opening the browser to sign in again.")
+                creds = None
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
         with open(TOKEN_FILE, 'w') as token:
@@ -101,19 +109,51 @@ def get_youtube_service():
     return build('youtube', 'v3', credentials=creds)
 
 
-def create_playlist(youtube, name, description):
+class QuotaExceeded(Exception):
+    """The YouTube Data API daily quota is used up; nothing more can be
+    added until it resets."""
+
+
+QUOTA_REASONS = {'quotaExceeded', 'dailyLimitExceeded'}
+
+
+def _http_error_reason(err):
+    """Pull the machine-readable reason ('quotaExceeded', 'videoNotFound',
+    ...) out of a googleapiclient HttpError."""
+    try:
+        payload = json.loads(err.content.decode('utf-8'))
+        errors = payload.get('error', {}).get('errors', [])
+        if errors:
+            return errors[0].get('reason', '')
+    except Exception:
+        pass
+    return ''
+
+
+def _execute(request):
+    """Run a YouTube Data API request, turning a quota failure into
+    QuotaExceeded so the run stops instead of skipping every later band."""
+    try:
+        return request.execute()
+    except HttpError as e:
+        if _http_error_reason(e) in QUOTA_REASONS:
+            raise QuotaExceeded(str(e)) from e
+        raise
+
+
+def create_playlist(youtube, name, description, privacy=PLAYLIST_PRIVACY):
     request = youtube.playlists().insert(
         part="snippet,status",
         body={
             "snippet": {"title": name, "description": description},
-            "status": {"privacyStatus": PLAYLIST_PRIVACY}
+            "status": {"privacyStatus": privacy}
         }
     )
-    return request.execute()['id']
+    return _execute(request)['id']
 
 
 def add_video_to_playlist(youtube, playlist_id, video_id):
-    youtube.playlistItems().insert(
+    _execute(youtube.playlistItems().insert(
         part="snippet",
         body={
             "snippet": {
@@ -121,36 +161,96 @@ def add_video_to_playlist(youtube, playlist_id, video_id):
                 "resourceId": {"kind": "youtube#video", "videoId": video_id}
             }
         }
-    ).execute()
+    ))
 
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 
-def find_artist(band_name):
-    """Search for an artist and return their browse ID."""
-    search_results = ytmusic.search(query=band_name, filter="artists", limit=1)
-    if not search_results:
-        return None
-    return search_results[0]['browseId']
+def _norm_name(name):
+    """Fold a band name for comparison: case, punctuation and a leading
+    'The' do not count ('P.O.D.' == 'POD', 'The Primals' == 'Primals')."""
+    raw = (name or '').lower()
+    folded = re.sub(r'[^a-z0-9]+', '', raw)
+    if not folded:
+        return raw.strip()  # non-Latin name: compare as written
+    if folded.startswith('the') and len(folded) > 3:
+        folded = folded[3:]
+    return folded
+
+
+_artist_cache = {}
+match_warnings = []  # bands whose YouTube Music match is not an exact name match
+
+
+def get_artist(band_name):
+    """Find the artist on YouTube Music and return its artist page, or None.
+
+    Prefers a search result whose name is the band's name. With no exact
+    match the first result is still used, but it is recorded in
+    `match_warnings` so the user can check that band by hand - small bands
+    with common names ('Nasty', 'Drain') easily resolve to someone else."""
+    if band_name in _artist_cache:
+        return _artist_cache[band_name]
+
+    results = ytmusic.search(query=band_name, filter="artists", limit=5)
+    artist = None
+    if results:
+        want = _norm_name(band_name)
+        pick = next((r for r in results if _norm_name(r.get('artist')) == want), None)
+        if pick is None:
+            pick = results[0]
+            msg = f"'{band_name}' matched '{pick.get('artist', '?')}' (no exact name match)"
+            match_warnings.append(msg)
+            print(f"    Check: {msg}")
+        artist = ytmusic.get_artist(pick['browseId'])
+
+    _artist_cache[band_name] = artist
+    return artist
+
+
+def get_artist_songs(artist, limit=20):
+    """Return up to `limit` of the artist's songs, most popular first.
+
+    The artist page itself only carries a handful of top songs; the full
+    list sits behind the 'songs' browseId as a playlist."""
+    songs = artist.get('songs') or {}
+    results = [s for s in songs.get('results') or [] if s.get('videoId')]
+    browse_id = songs.get('browseId')
+    if browse_id and len(results) < limit:
+        try:
+            full = ytmusic.get_playlist(browse_id, limit=limit).get('tracks') or []
+            full = [s for s in full if s.get('videoId')]
+            if len(full) > len(results):
+                results = full
+        except Exception as e:
+            print(f"    Could not load the full song list ({e}); using the top songs only")
+    return results[:limit]
 
 
 _view_count_cache = {}
+_view_failures = 0
 
 
 def get_view_count(video_id):
     """Get the view count for a video via YouTube Music. Cached per video_id
-    to avoid redundant lookups when the same track is ranked in multiple modes."""
+    to avoid redundant lookups when the same track is ranked in multiple modes.
+    A failed lookup is retried once, counted, and not cached."""
+    global _view_failures
     if video_id in _view_count_cache:
         return _view_count_cache[video_id]
-    try:
-        details = ytmusic.get_song(video_id)
-        views = int(details.get('videoDetails', {}).get('viewCount', 0))
-    except Exception:
-        views = 0
-    _view_count_cache[video_id] = views
-    return views
+    for attempt in range(2):
+        try:
+            details = ytmusic.get_song(video_id)
+            views = int(details.get('videoDetails', {}).get('viewCount', 0) or 0)
+            _view_count_cache[video_id] = views
+            return views
+        except Exception:
+            if attempt == 0:
+                time.sleep(2)
+    _view_failures += 1
+    return 0
 
 
 def is_original_album(title):
@@ -203,16 +303,6 @@ def filter_unique_albums(albums):
 # DUPLICATE DETECTION
 # =============================================================================
 
-def add_video_if_unique(youtube, playlist_id, video_id, seen_videos):
-    """Add a video to the playlist only if it's not already in `seen_videos`.
-    Mutates `seen_videos` on success."""
-    if video_id in seen_videos:
-        return False
-    add_video_to_playlist(youtube, playlist_id, video_id)
-    seen_videos.add(video_id)
-    return True
-
-
 # =============================================================================
 # RESUME / PROGRESS SUPPORT
 # =============================================================================
@@ -224,13 +314,34 @@ def save_progress(data):
 
 
 def load_progress():
-    """Load saved progress, or return None if no save file exists."""
+    """Load saved progress, or return None if no usable save file exists.
+    A file written by the older single-playlist format is converted."""
     if not os.path.exists(PROGRESS_FILE):
         return None
     try:
         with open(PROGRESS_FILE, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
+            data = json.load(f)
+        if 'jobs' in data:
+            data['jobs'][0]['bands']  # shape check
+            return data
+        return {
+            'choice': data['choice'],
+            'settings': data['settings'],
+            'privacy': PLAYLIST_PRIVACY,
+            'job_index': 0,
+            'log_entries': data.get('log_entries', []),
+            'jobs': [{
+                'name': data['settings'].get('playlist_name', 'playlist'),
+                'description': '',
+                'header': [],
+                'playlist_id': data['playlist_id'],
+                'bands': data['bands'],
+                'band_index': data.get('band_index', 0),
+                'partial_ids': [],
+                'added_video_ids': data.get('added_video_ids', []),
+            }],
+        }
+    except (json.JSONDecodeError, IOError, KeyError, IndexError, TypeError):
         return None
 
 
@@ -247,33 +358,20 @@ def clear_progress():
 def get_top_popular(band_name, count=3):
     """Mode 1: Top trending/popular songs right now."""
     print(f"  Searching top popular tracks: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
-    if 'songs' in artist and 'results' in artist['songs']:
-        return [song['videoId'] for song in artist['songs']['results'][:count]
-                if 'videoId' in song]
-    return []
+    return [song['videoId'] for song in get_artist_songs(artist, count)]
 
 
 def get_most_played_ever(band_name, count=3):
     """Mode 2: Most played/viewed songs of all time (sorted by view count)."""
     print(f"  Searching most played ever: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
-    if 'songs' not in artist or 'results' not in artist['songs']:
-        return []
-
-    songs = artist['songs']['results']
     songs_with_views = []
-    for song in songs:
-        if 'videoId' not in song:
-            continue
+    for song in get_artist_songs(artist, max(count, 20)):
         views = get_view_count(song['videoId'])
         songs_with_views.append((song['videoId'], views))
 
@@ -284,11 +382,9 @@ def get_most_played_ever(band_name, count=3):
 def get_best_of_albums(band_name, max_albums=5):
     """Mode 3: Most played song from each album (unique albums only)."""
     print(f"  Searching best album tracks: {band_name} (max {max_albums} albums)")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
     if 'albums' not in artist or 'results' not in artist['albums']:
         return []
 
@@ -325,29 +421,24 @@ def get_best_of_albums(band_name, max_albums=5):
 def get_deep_cuts(band_name, count=3):
     """Mode 4: Hidden gems - skip the obvious top hits."""
     print(f"  Searching deep cuts: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
-    if 'songs' not in artist or 'results' not in artist['songs']:
-        return []
-
-    songs = artist['songs']['results']
-    deep = [song['videoId'] for song in songs[5:5 + count] if 'videoId' in song]
-    if not deep:
-        deep = [song['videoId'] for song in songs[3:3 + count] if 'videoId' in song]
-    return deep
+    # Skip the ten biggest songs; for artists with a short list, skip fewer.
+    songs = get_artist_songs(artist, 10 + count)
+    for skip in (10, 5, 3):
+        deep = [song['videoId'] for song in songs[skip:skip + count]]
+        if deep:
+            return deep
+    return []
 
 
 def get_latest_releases(band_name, count=3):
     """Mode 5: Most recent singles and songs."""
     print(f"  Searching latest releases: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
 
     if 'singles' in artist and 'results' in artist['singles']:
         singles = artist['singles']['results'][:count]
@@ -363,35 +454,24 @@ def get_latest_releases(band_name, count=3):
         if tracks:
             return tracks
 
-    if 'songs' in artist and 'results' in artist['songs']:
-        return [song['videoId'] for song in artist['songs']['results'][:count]
-                if 'videoId' in song]
-    return []
+    return [song['videoId'] for song in get_artist_songs(artist, count)]
 
 
 def get_one_hit_sampler(band_name):
     """Mode 6: Just the single #1 song per artist."""
     print(f"  Searching #1 hit: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
-    if 'songs' in artist and 'results' in artist['songs']:
-        for song in artist['songs']['results'][:1]:
-            if 'videoId' in song:
-                return [song['videoId']]
-    return []
+    return [song['videoId'] for song in get_artist_songs(artist, 1)]
 
 
 def get_era_tracks(band_name, count=3, start_year=None, end_year=None):
     """Mode 7: Songs from a specific era/year range."""
     print(f"  Searching {start_year}-{end_year} era tracks: {band_name}")
-    browse_id = find_artist(band_name)
-    if not browse_id:
+    artist = get_artist(band_name)
+    if not artist:
         return []
-
-    artist = ytmusic.get_artist(browse_id)
 
     # Collect albums and singles that fall within the year range
     era_releases = []
@@ -493,6 +573,10 @@ def get_setlist_tracks(band_name, count=3):
     for setlist in setlists[:10]:
         for s in setlist.get('sets', {}).get('set', []):
             for song in s.get('song', []):
+                # Walk-on tapes and covers are played every night but are
+                # not the band's own songs.
+                if song.get('tape') or song.get('cover'):
+                    continue
                 name = song.get('name', '')
                 if name:
                     song_counts[name] += 1
@@ -503,10 +587,17 @@ def get_setlist_tracks(band_name, count=3):
     # Find the most commonly played songs on YouTube Music
     top_song_names = [name for name, _ in song_counts.most_common(count)]
     video_ids = []
+    want = _norm_name(band_name)
     for song_name in top_song_names:
-        results = ytmusic.search(f"{band_name} {song_name}", filter="songs", limit=1)
-        if results and 'videoId' in results[0]:
-            video_ids.append(results[0]['videoId'])
+        results = ytmusic.search(f"{band_name} {song_name}", filter="songs", limit=5)
+        # Only take a result credited to this band, not another act's
+        # song of the same name.
+        pick = next(
+            (r for r in results or [] if r.get('videoId') and any(
+                _norm_name(a.get('name')) == want for a in r.get('artists') or [])),
+            None)
+        if pick:
+            video_ids.append(pick['videoId'])
 
     return video_ids if video_ids else get_top_popular(band_name, count)
 
@@ -545,7 +636,12 @@ def classify_genre(tags):
     for tag in tags:
         for group, keywords in GENRE_GROUPS.items():
             for keyword in keywords:
-                if keyword in tag or tag in keyword:
+                # Exact tag match counts most; otherwise the keyword must
+                # appear as whole words ('metal' in 'melodic death metal'),
+                # never as a fragment of another word.
+                if tag == keyword:
+                    scores[group] += 3
+                elif re.search(r'(?<![a-z])' + re.escape(keyword) + r'(?![a-z])', tag):
                     scores[group] += 1
 
     best = max(scores, key=scores.get)
@@ -696,9 +792,22 @@ def get_playlist_name(choice, settings):
     suffix = ''
     if choice == '7':
         suffix = f" ({settings.get('start_year', '?')}-{settings.get('end_year', '?')})"
-    default_name = f"Download Festival 2026 - {mode_name}{suffix}"
+    default_name = f"Festival Playlist - {mode_name}{suffix}"
     custom = input(f"Playlist name (default: {default_name}): ").strip()
     return custom or default_name
+
+
+def get_privacy():
+    """Ask who can see the new playlist(s)."""
+    options = {'1': 'private', '2': 'unlisted', '3': 'public'}
+    default = next(k for k, v in options.items() if v == PLAYLIST_PRIVACY)
+    while True:
+        answer = input(
+            f"Visibility: [1] private  [2] unlisted  [3] public (default {default}): "
+        ).strip() or default
+        if answer in options:
+            return options[answer]
+        print("Please enter 1, 2 or 3.")
 
 
 def _bands_from_poster():
@@ -735,6 +844,11 @@ def _bands_from_poster():
         if answer == 'y':
             return bands
         if answer == 's':
+            if os.path.exists(DEFAULT_BANDS_FILE):
+                sure = input(f"{DEFAULT_BANDS_FILE} exists. Overwrite it? [y/n]: ")
+                if sure.strip().lower() != 'y':
+                    print("Not saved. Enter y, s, or n.")
+                    continue
             with open(DEFAULT_BANDS_FILE, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(bands) + '\n')
             print(f"Saved to {DEFAULT_BANDS_FILE}. Edit it and re-run the script.")
@@ -819,66 +933,176 @@ def call_track_mode(choice, settings, band_name):
     return func(band_name, count=oversample)
 
 
-def process_bands(youtube, playlist_id, bands, choice, settings,
-                  log_entries, seen_videos, start_index=0):
-    """Process a list of bands, adding tracks to the playlist.
+def process_bands(youtube, job, choice, settings, state):
+    """Add tracks for every remaining band of one playlist job.
 
-    `seen_videos` is a set of already-added video IDs; mutated in place.
-    Supports resuming from start_index. Saves progress after each band.
+    `job` carries its own position (`band_index`, `partial_ids`) and is saved
+    to the progress file after every single track, so a stop at any point
+    (quota, Ctrl+C, crash) resumes at the same band without re-adding tracks.
+    QuotaExceeded is allowed to propagate: the caller stops the whole run.
     Returns the number of duplicates skipped.
     """
+    bands = job['bands']
+    playlist_id = job['playlist_id']
+    log_entries = state['log_entries']
+    seen_videos = set(job['added_video_ids'])
+    partial = job.setdefault('partial_ids', [])
     dupes_skipped = 0
 
-    for i in range(start_index, len(bands)):
+    while job['band_index'] < len(bands):
+        i = job['band_index']
         band = bands[i]
         print(f"[{i + 1}/{len(bands)}] {band}")
+
         try:
             video_ids = call_track_mode(choice, settings, band)
-
-            if not video_ids:
-                log_entries.append(f"No tracks found for {band}")
-                print("  No tracks found")
-            else:
-                # For count-based modes, keep adding until we hit the target
-                # number of unique tracks — dupes shouldn't shrink the slot.
-                target = settings.get('count', 3) if choice in MODES_WITH_COUNT else len(video_ids)
-                added = 0
-                dupes_in_band = 0
-                for v_id in video_ids:
-                    if added >= target:
-                        break
-                    if add_video_if_unique(youtube, playlist_id, v_id, seen_videos):
-                        log_entries.append(f"Added video {v_id} for {band}")
-                        added += 1
-                    else:
-                        log_entries.append(f"Skipped duplicate {v_id} for {band}")
-                        dupes_in_band += 1
-                dupes_skipped += dupes_in_band
-
-                summary = f"  Added {added} track(s)"
-                if dupes_in_band:
-                    summary += f" ({dupes_in_band} duplicate(s) skipped, replaced with alternates)"
-                if added < target:
-                    summary += f" — only {added}/{target} unique available"
-                    log_entries.append(f"Only {added}/{target} unique tracks for {band}")
-                print(summary)
-
         except Exception as e:
             log_entries.append(f"Error on {band}: {e}")
             print(f"  Error: {e}")
+            video_ids = None
 
-        # Save progress after each band
-        save_progress({
-            'playlist_id': playlist_id,
-            'choice': choice,
-            'settings': settings,
-            'band_index': i + 1,
-            'bands': bands,
-            'added_video_ids': list(seen_videos),
-            'log_entries': log_entries,
-        })
+        if video_ids is not None and not video_ids:
+            log_entries.append(f"No tracks found for {band}")
+            print("  No tracks found")
+        elif video_ids:
+            # For count-based modes, keep adding until we hit the target
+            # number of unique tracks — dupes shouldn't shrink the slot.
+            target = (settings.get('count', 3) if choice in MODES_WITH_COUNT
+                      else len(video_ids))
+            added = len(partial)  # tracks added before an interrupted run
+            dupes_in_band = 0
+            failed = 0
+            for v_id in video_ids:
+                if added >= target:
+                    break
+                if v_id in partial:
+                    continue
+                if v_id in seen_videos:
+                    log_entries.append(f"Skipped duplicate {v_id} for {band}")
+                    dupes_in_band += 1
+                    continue
+                try:
+                    add_video_to_playlist(youtube, playlist_id, v_id)
+                except QuotaExceeded:
+                    dupes_skipped += dupes_in_band
+                    raise
+                except HttpError as e:
+                    # One unavailable video must not cost the band its
+                    # remaining tracks: note it and try the next one.
+                    reason = _http_error_reason(e) or str(e)
+                    log_entries.append(f"Could not add {v_id} for {band}: {reason}")
+                    failed += 1
+                    continue
+                seen_videos.add(v_id)
+                partial.append(v_id)
+                job['added_video_ids'].append(v_id)
+                log_entries.append(f"Added video {v_id} for {band}")
+                added += 1
+                save_progress(state)
+            dupes_skipped += dupes_in_band
+
+            summary = f"  Added {added} track(s)"
+            if dupes_in_band:
+                summary += f" ({dupes_in_band} duplicate(s) skipped, replaced with alternates)"
+            if failed:
+                summary += f" ({failed} could not be added)"
+            if added < target and choice in MODES_WITH_COUNT:
+                summary += f" — only {added}/{target} unique available"
+                log_entries.append(f"Only {added}/{target} unique tracks for {band}")
+            print(summary)
+
+        job['band_index'] = i + 1
+        job['partial_ids'] = partial = []
+        save_progress(state)
 
     return dupes_skipped
+
+
+def write_log(state):
+    lines = list(state['log_entries'])
+    if match_warnings:
+        lines += ["", "Artist matches to check by hand:"] + match_warnings
+    if _view_failures:
+        lines += ["", f"View count lookups that failed: {_view_failures} "
+                      "(rankings for those tracks may be off)"]
+    with open(LOG_FILE, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+
+
+def run_jobs(youtube, state):
+    """Create and fill every playlist in `state['jobs']`, starting wherever
+    the saved state says. Returns True when everything finished."""
+    choice = state['choice']
+    settings = state['settings']
+    log_entries = state['log_entries']
+    jobs = state['jobs']
+    total_dupes = 0
+    stopped = None
+
+    try:
+        while state['job_index'] < len(jobs):
+            job = jobs[state['job_index']]
+            if not job.get('playlist_id'):
+                job['playlist_id'] = create_playlist(
+                    youtube, job['name'], job['description'],
+                    state.get('privacy', PLAYLIST_PRIVACY))
+                url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
+                print(f"\nPlaylist '{job['name']}' created: {url}\n")
+                log_entries.extend(job.get('header', []))
+                log_entries.append(f"Playlist URL: {url}\n")
+                save_progress(state)
+            else:
+                url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
+                print(f"\nContinuing playlist '{job['name']}': {url}\n")
+
+            total_dupes += process_bands(youtube, job, choice, settings, state)
+            log_entries.append("")
+            state['job_index'] += 1
+            save_progress(state)
+    except QuotaExceeded:
+        stopped = ("YouTube's daily API quota is used up (about 199 track adds "
+                   "per day on a default project). It resets at midnight "
+                   "Pacific time.")
+    except KeyboardInterrupt:
+        stopped = "Stopped by you."
+
+    write_log(state)
+
+    if stopped:
+        save_progress(state)
+        job = jobs[state['job_index']]
+        print(f"\n{stopped}")
+        print(f"Progress saved at band {job['band_index'] + 1}/{len(job['bands'])} "
+              f"of '{job['name']}'. Run the script again and answer 'y' to resume.")
+        print(f"Log so far saved to {LOG_FILE}")
+        return False
+
+    clear_progress()
+    total_bands = sum(len(j['bands']) for j in jobs)
+    print(f"\nDone! {total_bands} bands processed. {total_dupes} duplicate(s) skipped.")
+    for job in jobs:
+        print(f"  {job['name']}: https://music.youtube.com/playlist?list={job['playlist_id']}")
+    if match_warnings:
+        print(f"\n{len(match_warnings)} band(s) had no exact artist name match - "
+              f"check them in {LOG_FILE}.")
+    if _view_failures:
+        print(f"{_view_failures} view count lookup(s) failed; rankings for those "
+              "tracks may be off.")
+    print(f"Log saved to {LOG_FILE}")
+    return True
+
+
+def new_job(name, description, bands, header):
+    return {
+        'name': name,
+        'description': description,
+        'bands': bands,
+        'header': header,
+        'playlist_id': None,
+        'band_index': 0,
+        'partial_ids': [],
+        'added_video_ids': [],
+    }
 
 
 # =============================================================================
@@ -893,37 +1117,19 @@ def main():
 
     # --- Check for resume ---
     progress = load_progress()
+    if progress and progress['job_index'] >= len(progress['jobs']):
+        clear_progress()
+        progress = None
     if progress:
-        total = len(progress.get('bands', []))
-        idx = progress.get('band_index', 0)
-        print(f"\nFound saved progress: band {idx}/{total}")
+        job = progress['jobs'][progress['job_index']]
+        print(f"\nFound saved progress: playlist {progress['job_index'] + 1}/"
+              f"{len(progress['jobs'])} ('{job['name']}'), "
+              f"band {job['band_index']}/{len(job['bands'])} done")
         answer = input("Resume previous session? [y/n]: ").strip().lower()
         if answer == 'y':
-            youtube = get_youtube_service()
-            playlist_id = progress['playlist_id']
-            choice = progress['choice']
-            settings = progress['settings']
-            bands = progress['bands']
-            log_entries = progress['log_entries']
-            seen_videos = set(progress.get('added_video_ids', []))
-            playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-
-            print(f"Resuming from band {idx + 1}/{total}")
-            print(f"Playlist: {playlist_url}\n")
-
-            dupes = process_bands(youtube, playlist_id, bands, choice,
-                                  settings, log_entries, seen_videos,
-                                  start_index=idx)
-
-            clear_progress()
-            with open(LOG_FILE, 'w', encoding='utf-8') as f:
-                f.write("\n".join(log_entries))
-            print(f"\nDone! {total} bands processed. {dupes} duplicate(s) skipped.")
-            print(f"Playlist: {playlist_url}")
-            print(f"Log saved to {LOG_FILE}")
+            run_jobs(get_youtube_service(), progress)
             return
-        else:
-            clear_progress()
+        clear_progress()
 
     # --- Fresh run ---
     bands = get_bands()
@@ -934,8 +1140,8 @@ def main():
     choice = show_menu()
     settings = get_mode_settings(choice)
 
-    # --- Genre Cluster mode ---
     if choice == '9':
+        # --- Genre Cluster mode: one playlist job per genre ---
         print("\nWhich track mode should each genre playlist use?")
         for key, mode in TRACK_MODES.items():
             print(f"  {key}. {mode['name']}")
@@ -948,7 +1154,6 @@ def main():
 
         clusters = build_genre_clusters(bands)
 
-        # Show groupings
         print("\n=== Genre Groups ===")
         for genre, genre_bands in sorted(clusters.items()):
             preview = ', '.join(genre_bands[:5])
@@ -961,73 +1166,51 @@ def main():
             print("Cancelled.")
             return
 
-        youtube = get_youtube_service()
-        all_log_entries = []
-        total_dupes = 0
-
+        mode_name = TRACK_MODES[track_choice]['name']
+        mode_desc = TRACK_MODES[track_choice]['description']
+        jobs = []
         for genre, genre_bands in sorted(clusters.items()):
-            playlist_name = input(
-                f"Playlist name for {genre} (default: Download 2026 - {genre}): "
-            ).strip() or f"Download 2026 - {genre}"
+            default_name = f"Festival Playlist - {genre}"
+            name = input(
+                f"Playlist name for {genre} (default: {default_name}): "
+            ).strip() or default_name
+            jobs.append(new_job(
+                name,
+                f"{genre} bands - {mode_desc}. Generated by YouTube Playlist Creator.",
+                genre_bands,
+                [f"Genre: {genre}", f"Playlist: {name}", f"Track mode: {mode_name}"],
+            ))
+        choice, settings = track_choice, track_settings
+    else:
+        # --- Standard single-playlist mode ---
+        playlist_name = get_playlist_name(choice, settings)
+        print(f"\nMode: {ALL_MODES[choice]['name']}")
+        print(f"Playlist: {playlist_name}")
+        jobs = [new_job(
+            playlist_name,
+            f"{ALL_MODES[choice]['description']}. Generated by YouTube Playlist Creator.",
+            bands,
+            [f"Mode: {ALL_MODES[choice]['name']}", f"Playlist: {playlist_name}"],
+        )]
 
-            mode_desc = TRACK_MODES[track_choice]['description']
-            description = f"{genre} bands - {mode_desc}. Generated by YouTube Playlist Creator."
-            playlist_id = create_playlist(youtube, playlist_name, description)
-            playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-            print(f"\nPlaylist '{playlist_name}' created: {playlist_url}")
+    state = {
+        'choice': choice,
+        'settings': settings,
+        'privacy': get_privacy(),
+        'jobs': jobs,
+        'job_index': 0,
+        'log_entries': [],
+    }
 
-            log_entries = [
-                f"Genre: {genre}",
-                f"Playlist: {playlist_name}",
-                f"Track mode: {TRACK_MODES[track_choice]['name']}",
-                f"Playlist URL: {playlist_url}\n",
-            ]
+    total_tracks = sum(len(j['bands']) for j in jobs) * (
+        settings.get('count', 3) if choice in MODES_WITH_COUNT
+        else settings.get('max_albums', 1))
+    if total_tracks > 190:
+        print(f"\nNote: about {total_tracks} tracks planned. A default Google project "
+              "allows about 199 adds per day, so this will pause when the quota "
+              "runs out and can be resumed the next day.")
 
-            # Reset duplicate tracking per genre playlist
-            seen_videos = set()
-            dupes = process_bands(youtube, playlist_id, genre_bands,
-                                  track_choice, track_settings, log_entries,
-                                  seen_videos)
-            total_dupes += dupes
-            all_log_entries.extend(log_entries)
-            all_log_entries.append("")
-
-        with open(LOG_FILE, 'w', encoding='utf-8') as f:
-            f.write("\n".join(all_log_entries))
-        print(f"\nAll genre playlists created! {total_dupes} total duplicate(s) skipped.")
-        print(f"Log saved to {LOG_FILE}")
-        return
-
-    # --- Standard single-playlist mode ---
-    playlist_name = get_playlist_name(choice, settings)
-    settings['playlist_name'] = playlist_name
-
-    print(f"\nMode: {ALL_MODES[choice]['name']}")
-    print(f"Playlist: {playlist_name}")
-
-    youtube = get_youtube_service()
-    description = f"{ALL_MODES[choice]['description']}. Generated by YouTube Playlist Creator."
-    playlist_id = create_playlist(youtube, playlist_name, description)
-    playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-    print(f"Playlist created: {playlist_url}\n")
-
-    log_entries = [
-        f"Mode: {ALL_MODES[choice]['name']}",
-        f"Playlist: {playlist_name}",
-        f"Playlist URL: {playlist_url}\n",
-    ]
-
-    seen_videos = set()
-    dupes = process_bands(youtube, playlist_id, bands, choice, settings,
-                          log_entries, seen_videos)
-
-    clear_progress()
-    with open(LOG_FILE, 'w', encoding='utf-8') as f:
-        f.write("\n".join(log_entries))
-
-    print(f"\nDone! {len(bands)} bands processed. {dupes} duplicate(s) skipped.")
-    print(f"Playlist: {playlist_url}")
-    print(f"Log saved to {LOG_FILE}")
+    run_jobs(get_youtube_service(), state)
 
 
 if __name__ == '__main__':
