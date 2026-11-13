@@ -114,6 +114,10 @@ def get_youtube_service():
     return build('youtube', 'v3', credentials=creds)
 
 
+class Cancelled(Exception):
+    """A progress callback asked the run to stop (web UI cancel button)."""
+
+
 class QuotaExceeded(Exception):
     """The YouTube Data API daily quota is used up; nothing more can be
     added until it resets."""
@@ -939,13 +943,15 @@ def call_track_mode(choice, settings, band_name):
     return func(band_name, count=oversample)
 
 
-def process_bands(youtube, job, choice, settings, state):
+def process_bands(youtube, job, choice, settings, state, progress_callback=None):
     """Add tracks for every remaining band of one playlist job.
 
     `job` carries its own position (`band_index`, `partial_ids`) and is saved
     to the progress file after every single track, so a stop at any point
     (quota, Ctrl+C, crash) resumes at the same band without re-adding tracks.
     QuotaExceeded is allowed to propagate: the caller stops the whole run.
+    `progress_callback(done, total, band)` is called after each band; if it
+    returns False the run stops there by raising Cancelled.
     Returns the number of duplicates skipped.
     """
     bands = job['bands']
@@ -1021,6 +1027,10 @@ def process_bands(youtube, job, choice, settings, state):
         job['partial_ids'] = partial = []
         save_progress(state)
 
+        if progress_callback and progress_callback(i + 1, len(bands), band) is False:
+            state['dupes'] = state.get('dupes', 0) + dupes_skipped
+            raise Cancelled()
+
     return dupes_skipped
 
 
@@ -1035,15 +1045,20 @@ def write_log(state):
         f.write("\n".join(lines))
 
 
-def run_jobs(youtube, state):
+def run_jobs(youtube, state, progress_callback=None):
     """Create and fill every playlist in `state['jobs']`, starting wherever
-    the saved state says. Returns True when everything finished."""
+    the saved state says.
+
+    Returns 'done' when everything finished, 'quota' when the daily quota
+    ran out, or 'stopped' on Ctrl+C / a cancelling `progress_callback`. In
+    the last two cases progress is kept so the run can be resumed.
+    `state['dupes']` holds the running count of duplicates skipped."""
     choice = state['choice']
     settings = state['settings']
     log_entries = state['log_entries']
     jobs = state['jobs']
-    total_dupes = 0
     stopped = None
+    result = 'done'
 
     try:
         while state['job_index'] < len(jobs):
@@ -1060,8 +1075,12 @@ def run_jobs(youtube, state):
             else:
                 url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
                 print(f"\nContinuing playlist '{job['name']}': {url}\n")
+            if progress_callback and progress_callback(
+                    job['band_index'], len(job['bands']), '') is False:
+                raise Cancelled()
 
-            total_dupes += process_bands(youtube, job, choice, settings, state)
+            state['dupes'] = state.get('dupes', 0) + process_bands(
+                youtube, job, choice, settings, state, progress_callback)
             log_entries.append("")
             state['job_index'] += 1
             save_progress(state)
@@ -1069,8 +1088,10 @@ def run_jobs(youtube, state):
         stopped = ("YouTube's daily API quota is used up (about 199 track adds "
                    "per day on a default project). It resets at midnight "
                    "Pacific time.")
-    except KeyboardInterrupt:
+        result = 'quota'
+    except (KeyboardInterrupt, Cancelled):
         stopped = "Stopped by you."
+        result = 'stopped'
 
     write_log(state)
 
@@ -1081,11 +1102,11 @@ def run_jobs(youtube, state):
         print(f"Progress saved at band {job['band_index'] + 1}/{len(job['bands'])} "
               f"of '{job['name']}'. Run the script again and answer 'y' to resume.")
         print(f"Log so far saved to {LOG_FILE}")
-        return False
+        return result
 
     clear_progress()
     total_bands = sum(len(j['bands']) for j in jobs)
-    print(f"\nDone! {total_bands} bands processed. {total_dupes} duplicate(s) skipped.")
+    print(f"\nDone! {total_bands} bands processed. {state.get('dupes', 0)} duplicate(s) skipped.")
     for job in jobs:
         print(f"  {job['name']}: https://music.youtube.com/playlist?list={job['playlist_id']}")
     if match_warnings:
@@ -1095,7 +1116,7 @@ def run_jobs(youtube, state):
         print(f"{_view_failures} view count lookup(s) failed; rankings for those "
               "tracks may be off.")
     print(f"Log saved to {LOG_FILE}")
-    return True
+    return 'done'
 
 
 def new_job(name, description, bands, header):

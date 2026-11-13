@@ -67,7 +67,7 @@ Each mode is a distinct code path within `process_bands()`:
 
 ### Web Interface
 
-`app.py` is a Flask app that wraps the same functions in `bot.py` — no playlist logic is duplicated. It exposes a JSON API (`/api/run`, `/api/cluster`, `/api/resume`, `/api/poster`, `/api/bands`, `/api/job`, …) consumed by a single-page UI in `templates/index.html` + `static/`. Playlist runs execute in a background thread (one job at a time, tracked in a module-level `_job` dict); the frontend polls `/api/job` for live progress, and cancel/resume reuse the CLI's `progress.json` mechanism via the `progress_callback` hook in `process_bands()`. OAuth uses a browser redirect flow (`/api/auth/start` → Google consent → `/oauth2callback`) instead of the CLI's `run_local_server`, writing the same `token.json`.
+`app.py` is a Flask app that wraps the same functions in `bot.py` — no playlist logic is duplicated. It exposes a JSON API (`/api/run`, `/api/cluster`, `/api/resume`, `/api/poster`, `/api/bands`, `/api/job`, …) consumed by a single-page UI in `templates/index.html` + `static/`. Playlist runs execute in a background thread (one job at a time, tracked in a module-level `_job` dict); the frontend polls `/api/job` for live progress, and cancel/resume reuse the CLI's `progress.json` mechanism via `bot.run_jobs()` and its `progress_callback` hook. OAuth uses a browser redirect flow (`/api/auth/start` → Google consent → `/oauth2callback`) instead of the CLI's `run_local_server`, writing the same `token.json`.
 
 ## Key Files
 

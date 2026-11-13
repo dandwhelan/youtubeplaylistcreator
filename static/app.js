@@ -67,7 +67,8 @@ async function loadStatus() {
 
   if (s.progress && s.job_state !== 'running') {
     $('resume-text').textContent =
-      `Unfinished run found (${s.progress.mode}): band ${s.progress.band_index}/${s.progress.total}.`;
+      `Unfinished run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
+      ` "${s.progress.playlist}", band ${s.progress.band_index}/${s.progress.total} done.`;
     $('resume-banner').classList.remove('hidden');
   } else {
     $('resume-banner').classList.add('hidden');
@@ -469,7 +470,7 @@ async function pollJob() {
   // Playlist links
   if (job.playlists && job.playlists.length) {
     $('playlist-links').innerHTML = job.playlists
-      .map((p) => `<a href="${p.url}" target="_blank" rel="noopener">🎵 ${p.name} — ${p.url}</a>`)
+      .map((p) => `<a href="${p.url}" target="_blank" rel="noopener">🎵 ${p.name.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)} — ${p.url}</a>`)
       .join('');
   }
 
@@ -484,10 +485,16 @@ async function pollJob() {
     if (job.state === 'done') {
       $('progress-text').textContent = job.kind === 'cluster'
         ? 'Genre groups ready — name the playlists below, then create them.'
-        : `Done! ${job.total} bands processed, ${job.dupes} duplicate(s) skipped.`;
+        : `Done! ${job.dupes} duplicate(s) skipped.` +
+          (job.warnings && job.warnings.length
+            ? ` Check these artist matches: ${job.warnings.join('; ')}` : '');
       $('progress-bar').style.width = '100%';
     } else if (job.state === 'error') {
       $('progress-text').textContent = 'Error: ' + job.error;
+    } else if (job.state === 'quota') {
+      $('progress-text').textContent =
+        "YouTube's daily quota is used up (about 199 tracks per day). Progress was saved — " +
+        'resume from the banner after it resets at midnight Pacific time.';
     } else if (job.state === 'cancelled') {
       $('progress-text').textContent =
         'Cancelled. Progress was saved — you can resume from the banner after reloading.';
