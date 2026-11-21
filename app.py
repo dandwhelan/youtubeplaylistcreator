@@ -438,6 +438,9 @@ def _run_state(job, youtube, state):
             if j.get('playlist_id') and not str(j['playlist_id']).startswith('DRYRUN')
             for plat, url in bot.playlist_links(youtube, j['playlist_id'])]
         job['dupes'] = state.get('dupes', 0)
+        job['songs_added'] = sum(len(j.get('added_video_ids', [])) for j in state['jobs'])
+        job['songs_planned'] = sum(len(j['bands']) for j in state['jobs']) * \
+            bot.tracks_per_band(state['choice'], state['settings'])
         return not job['cancel']
 
     try:

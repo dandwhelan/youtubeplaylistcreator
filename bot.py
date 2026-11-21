@@ -485,7 +485,7 @@ class MultiWriter:
             except (AuthExpired, TemporaryFailure, QuotaExceeded) as e:
                 raise type(e)(f"{w.name}: {e}") from e
             except Exception as e:
-                raise RuntimeError(f"{w.name} could not create the playlist: {e}") from e
+                raise RuntimeError(f"{w.name}: {e}") from e
         return '|'.join(ids)
 
     def _ids(self, playlist_id):

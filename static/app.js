@@ -543,8 +543,14 @@ async function pollJob() {
   $('progress-bar').style.width = pct + '%';
   const verb = job.kind === 'cluster' ? 'Classifying' : 'Processing';
   if (job.state === 'running') {
-    $('progress-text').textContent =
-      `${verb} ${job.current}/${job.total}` + (job.band ? ` — ${job.band}` : '');
+    if (job.kind === 'cluster') {
+      $('progress-text').textContent =
+        `${verb} ${job.current}/${job.total}` + (job.band ? ` — ${job.band}` : '');
+    } else {
+      $('progress-text').textContent =
+        `Band ${job.current} of ${job.total}` + (job.band ? ` (${job.band})` : '') +
+        (job.songs_planned ? ` · ${job.songs_added || 0} of ~${job.songs_planned} songs added` : '');
+    }
   }
 
   // Log

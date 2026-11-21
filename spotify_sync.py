@@ -63,13 +63,33 @@ def _json(r, what):
                            f"(HTTP {r.status_code}): {r.text[:200]}") from None
 
 
+_403_FIXES = [
+    ('premium', "The Spotify account that created the developer app needs an active "
+                "Premium subscription. If you just upgraded, wait a few hours and try again."),
+    ('not be registered', "In the Spotify developer dashboard open your app > Settings > "
+                          "User Management and add the name and email of the Spotify account "
+                          "you connected with."),
+    ('scope', "Click Disconnect, then Connect Spotify again and approve playlist access."),
+    ('web api', "In the developer dashboard open your app > Settings > Edit, tick Web API, Save."),
+]
+
+
 def _explain_403(r):
-    text = (r.text or '').strip()[:200]
-    return ("Spotify refused (403): " + (text or 'no reason given') + ". Usual fixes: "
-            "(1) the Spotify account that owns the developer app needs Premium; "
-            "(2) in the developer dashboard, open your app > Settings > User Management "
-            "and add the email of the Spotify account you signed in with; "
-            "(3) click Disconnect then Connect Spotify again so it asks for playlist permission.")
+    """Spotify's own reason, plus only the fix that matches it."""
+    text = (r.text or '').strip()
+    try:
+        data = r.json()
+        err = data.get('error', data) if isinstance(data, dict) else data
+        text = (err.get('message') if isinstance(err, dict) else None) or text
+    except ValueError:
+        pass
+    text = text[:200].rstrip('. ') or 'no reason given'
+    lower = text.lower()
+    fixes = [fix for key, fix in _403_FIXES if key in lower]
+    if not fixes:
+        fixes = ["Check the app's Settings in the Spotify developer dashboard: Web API ticked, "
+                 "your account added under User Management, and the app owner has Premium."]
+    return f"Spotify refused: {text}. Fix: {' '.join(fixes)}"
 
 
 def client_id():
