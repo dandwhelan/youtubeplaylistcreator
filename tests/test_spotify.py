@@ -124,3 +124,35 @@ def test_pkce_auth_url(monkeypatch):
     assert 'code_challenge_method=S256' in url and 'client_id=cid' in url
     with pytest.raises(sp.SpotifyAuthError):
         sp.finish_auth(pending, 'code', 'wrong-state')
+
+
+def test_spotify_403_on_create_gives_clear_reason(fake_modes, spotify, monkeypatch):
+    from conftest import Resp
+
+    class PlainText(Resp):
+        def __init__(self):
+            super().__init__(403)
+            self.text = 'Check settings on developer.spotify.com/dashboard, the user may not be registered.'
+
+        def json(self):
+            raise ValueError('Expecting value')
+
+    orig = spotify.__call__
+    monkeypatch.setattr(sp.requests, 'request',
+                        lambda m, url, **kw: PlainText() if url.endswith('/me/playlists') or url.endswith('/me')
+                        else orig(m, url, **kw))
+    yt = FakeWriter()
+    st = make_state(['Band'], platform='both')
+    assert bot.run_jobs(bot.MultiWriter([sp.SpotifyWriter(), yt]), st) == 'error'
+    msg = st['last_stop']
+    assert 'Spotify' in msg and 'may not be registered' in msg and 'User Management' in msg
+    assert yt.created == 0  # nothing half-created on YouTube
+
+
+def test_ytmusic_non_json_reply_is_auth_problem(monkeypatch):
+    w = bot.YTMusicWriter.__new__(bot.YTMusicWriter)
+
+    def boom(*a, **k):
+        raise ValueError('Expecting value: line 1 column 1 (char 0)')
+    with pytest.raises(bot.AuthExpired):
+        w._call(boom)
