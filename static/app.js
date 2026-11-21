@@ -539,6 +539,9 @@ async function pollJob() {
         "YouTube's daily quota is used up (about 199 tracks per day). Progress was saved — " +
         'resume from the banner after it resets at midnight Pacific time, or add a ' +
         'YouTube Music sign-in under API keys & credentials to resume now with no quota.';
+    } else if (job.state === 'interrupted') {
+      $('progress-text').textContent =
+        `Paused: ${job.error} Progress was saved after every track — use Resume in the banner.`;
     } else if (job.state === 'cancelled') {
       $('progress-text').textContent =
         'Cancelled. Progress was saved — you can resume from the banner after reloading.';

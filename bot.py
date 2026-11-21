@@ -139,7 +139,44 @@ class QuotaExceeded(Exception):
     added until it resets."""
 
 
+class AuthExpired(Exception):
+    """The sign-in stopped working mid-run (token revoked/expired, or the
+    YouTube Music cookies were signed out). Sign in again, then resume."""
+
+
+class TemporaryFailure(Exception):
+    """Network or server trouble that outlasted the retries. Resume later."""
+
+
 QUOTA_REASONS = {'quotaExceeded', 'dailyLimitExceeded'}
+AUTH_REASONS = {'authError', 'unauthorized'}
+TRANSIENT_REASONS = {'backendError', 'internalError', 'rateLimitExceeded',
+                     'userRateLimitExceeded'}
+TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+RETRY_DELAYS = (2, 5, 15, 30)
+
+
+def _with_retries(call):
+    """Run `call`, retrying network blips and 5xx errors with backoff.
+    Raises TemporaryFailure if they persist."""
+    last = None
+    for delay in (0,) + RETRY_DELAYS:
+        if delay:
+            print(f"    temporary problem ({last}); retrying in {delay}s...")
+            time.sleep(delay)
+        try:
+            return call()
+        except HttpError as e:
+            status = getattr(e.resp, 'status', 0)
+            if status in TRANSIENT_STATUS or _http_error_reason(e) in TRANSIENT_REASONS:
+                last = f"HTTP {status}"
+                continue
+            raise
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+                ConnectionError, TimeoutError) as e:
+            last = type(e).__name__
+            continue
+    raise TemporaryFailure(f"gave up after {len(RETRY_DELAYS)} retries: {last}")
 
 
 def _http_error_reason(err):
@@ -157,12 +194,18 @@ def _http_error_reason(err):
 
 def _execute(request):
     """Run a YouTube Data API request, turning a quota failure into
-    QuotaExceeded so the run stops instead of skipping every later band."""
+    QuotaExceeded and a dead sign-in into AuthExpired so the run stops
+    (resumably) instead of skipping every later band."""
     try:
-        return request.execute()
+        return _with_retries(request.execute)
+    except RefreshError as e:
+        raise AuthExpired(str(e)) from e
     except HttpError as e:
-        if _http_error_reason(e) in QUOTA_REASONS:
+        reason = _http_error_reason(e)
+        if reason in QUOTA_REASONS:
             raise QuotaExceeded(str(e)) from e
+        if getattr(e.resp, 'status', 0) == 401 or reason in AUTH_REASONS:
+            raise AuthExpired(str(e)) from e
         raise
 
 
@@ -280,16 +323,31 @@ class YTMusicWriter:
     def __init__(self, auth_file=BROWSER_AUTH_FILE):
         self.yt = YTMusic(auth_file)
 
+    def _call(self, fn, *args, **kwargs):
+        try:
+            return _with_retries(lambda: fn(*args, **kwargs))
+        except TemporaryFailure:
+            raise
+        except Exception as e:
+            msg = str(e)
+            if '401' in msg or '403' in msg or 'sign in' in msg.lower():
+                raise AuthExpired(f"YouTube Music sign-in no longer works ({msg[:120]}). "
+                                  "Re-copy the browser headers.") from e
+            raise
+
     def create_playlist(self, name, description, privacy):
-        result = self.yt.create_playlist(name, description,
-                                         privacy_status=privacy.upper())
+        result = self._call(self.yt.create_playlist, name, description,
+                            privacy_status=privacy.upper())
         if not isinstance(result, str):
             raise RuntimeError(f"YouTube Music refused to create the playlist: {result}")
         return result
 
     def add_video(self, playlist_id, video_id):
         try:
-            result = self.yt.add_playlist_items(playlist_id, [video_id], duplicates=True)
+            result = self._call(self.yt.add_playlist_items, playlist_id,
+                                [video_id], duplicates=True)
+        except (AuthExpired, TemporaryFailure):
+            raise
         except Exception as e:
             raise AddFailed(str(e)) from e
         if not (isinstance(result, dict) and 'SUCCEEDED' in str(result.get('status', ''))):
@@ -532,9 +590,14 @@ def filter_unique_albums(albums):
 # =============================================================================
 
 def save_progress(data):
-    """Save current progress so the run can be resumed later."""
-    with open(PROGRESS_FILE, 'w') as f:
+    """Save current progress so the run can be resumed later. Written to a
+    temp file then swapped in, so a crash mid-write can't corrupt it."""
+    tmp = PROGRESS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, PROGRESS_FILE)
 
 
 def load_progress():
@@ -1312,9 +1375,22 @@ def run_jobs(youtube, state, progress_callback=None):
                    "Pacific time. Tip: run `python bot.py --setup-browser` once "
                    "to write via YouTube Music instead, which has no daily quota.")
         result = 'quota'
+    except AuthExpired as e:
+        stopped = (f"Sign-in expired mid-run ({str(e)[:160]}). Sign in again "
+                   "(the CLI asks automatically; in the web UI click Connect "
+                   "YouTube or re-save the YouTube Music sign-in), then resume.")
+        result = 'auth'
+    except TemporaryFailure as e:
+        stopped = f"Network/server trouble ({e}). Check your connection, then resume."
+        result = 'network'
     except (KeyboardInterrupt, Cancelled):
         stopped = "Stopped by you."
         result = 'stopped'
+    except Exception as e:  # anything unexpected: keep progress, don't lose the run
+        stopped = f"Unexpected error: {type(e).__name__}: {e}"
+        log_entries.append(stopped)
+        result = 'error'
+    state['last_stop'] = stopped
 
     write_log(state)
 

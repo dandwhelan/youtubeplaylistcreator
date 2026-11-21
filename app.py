@@ -363,8 +363,11 @@ def _run_state(job, youtube, state):
         result = bot.run_jobs(youtube, state, progress_callback=callback)
         callback(job['current'], job['total'], job['band'])
         job['warnings'] = list(bot.match_warnings)
-        _finish_job(job, {'done': 'done', 'quota': 'quota',
-                          'stopped': 'cancelled'}[result])
+        _finish_job(job, {'done': 'done', 'quota': 'quota', 'stopped': 'cancelled',
+                          'auth': 'interrupted', 'network': 'interrupted',
+                          'error': 'interrupted'}[result],
+                    state.get('last_stop') if result in ('auth', 'network', 'error')
+                    else None)
     except Exception as e:
         _finish_job(job, 'error', e)
 

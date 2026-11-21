@@ -81,7 +81,7 @@ Then open **http://localhost:5000**. The web UI gives you:
 
 ### Extra Features
 - **Duplicate detection** - automatically skips songs already in the playlist
-- **Resume support** - progress is saved after every track. If the script stops (crash, Ctrl+C, or the daily quota below), restart it and answer `y` to carry on from the same band, in every mode including Genre Cluster
+- **Resume support** - progress is saved after every track. If the script stops (crash, Ctrl+C, or the daily quota below), restart it and answer `y` to carry on from the same band, in every mode including Genre Cluster. Expired sign-ins, network drops (retried with backoff first) and unexpected errors all stop the run cleanly with progress kept; sign in again if asked, then resume. The saved playlist works with either sign-in method, so you can hit the quota on the Data API and finish the same playlist via `--setup-browser`
 - **Visibility prompt** - choose private (default), unlisted or public for each run
 - **Artist match check** - a band with no exact name match on YouTube Music is still added, but listed at the end of `playlist_log.txt` so you can check it by hand
 
