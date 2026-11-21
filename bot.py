@@ -374,6 +374,10 @@ class YTMusicWriter:
             return _with_retries(lambda: fn(*args, **kwargs))
         except TemporaryFailure:
             raise
+        except ValueError as e:  # JSONDecodeError: got a web page, not API data
+            raise AuthExpired("YouTube Music didn't accept the saved sign-in (it replied "
+                              "with a web page). Re-copy it: Copy as cURL from a signed-in "
+                              "music.youtube.com tab.") from e
         except Exception as e:
             msg = str(e)
             if '401' in msg or '403' in msg or 'sign in' in msg.lower():
@@ -474,8 +478,15 @@ class MultiWriter:
         return any(w.uses_quota for w in self.writers)
 
     def create_playlist(self, name, description, privacy):
-        return '|'.join(w.create_playlist(name, description, privacy)
-                        for w in self.writers)
+        ids = []
+        for w in self.writers:
+            try:
+                ids.append(w.create_playlist(name, description, privacy))
+            except (AuthExpired, TemporaryFailure, QuotaExceeded) as e:
+                raise type(e)(f"{w.name}: {e}") from e
+            except Exception as e:
+                raise RuntimeError(f"{w.name} could not create the playlist: {e}") from e
+        return '|'.join(ids)
 
     def _ids(self, playlist_id):
         ids = str(playlist_id).split('|')
@@ -1604,8 +1615,10 @@ def run_jobs(youtube, state, progress_callback=None):
         stopped = "Stopped by you."
         result = 'stopped'
     except Exception as e:  # anything unexpected: keep progress, don't lose the run
-        stopped = f"Unexpected error: {type(e).__name__}: {e}"
+        import traceback
+        stopped = f"{type(e).__name__}: {e}"
         log_entries.append(stopped)
+        log_entries.append(traceback.format_exc())
         result = 'error'
     state['last_stop'] = stopped
 

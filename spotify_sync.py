@@ -50,6 +50,28 @@ class SpotifyQuota(Exception):
     pass
 
 
+class SpotifyForbidden(Exception):
+    """Spotify refused the account (not allowed on the developer app,
+    no Premium, or missing permissions)."""
+
+
+def _json(r, what):
+    try:
+        return r.json()
+    except ValueError:
+        raise RuntimeError(f"Spotify sent an unexpected reply when trying to {what} "
+                           f"(HTTP {r.status_code}): {r.text[:200]}") from None
+
+
+def _explain_403(r):
+    text = (r.text or '').strip()[:200]
+    return ("Spotify refused (403): " + (text or 'no reason given') + ". Usual fixes: "
+            "(1) the Spotify account that owns the developer app needs Premium; "
+            "(2) in the developer dashboard, open your app > Settings > User Management "
+            "and add the email of the Spotify account you signed in with; "
+            "(3) click Disconnect then Connect Spotify again so it asks for playlist permission.")
+
+
 def client_id():
     return get_key('SPOTIFY_CLIENT_ID')
 
@@ -237,12 +259,15 @@ class SpotifyWriter:
         body = {'name': name[:100], 'description': description[:300],
                 'public': privacy == 'public'}
         r = _request('POST', '/me/playlists', json=body)
-        if r.status_code in (403, 404, 410):  # older API shape
-            me = _request('GET', '/me').json()
+        if r.status_code in (404, 410):  # older API shape
+            me = _json(r=_request('GET', '/me'), what='read your Spotify profile')
             r = _request('POST', f"/users/{me['id']}/playlists", json=body)
+        if r.status_code == 403:
+            raise SpotifyForbidden(_explain_403(r))
         if r.status_code not in (200, 201):
-            raise RuntimeError(f'Spotify could not create the playlist: {r.text[:200]}')
-        return r.json()['id']
+            raise RuntimeError(f'Spotify could not create the playlist '
+                               f'(HTTP {r.status_code}): {r.text[:200]}')
+        return _json(r, 'create the playlist')['id']
 
     def find_track(self, title, artist):
         """Best Spotify URI for title/artist, or None."""
@@ -288,6 +313,8 @@ class SpotifyWriter:
         r = _request('POST', f'/playlists/{playlist_id}/items', json={'uris': [uri]})
         if r.status_code in (404, 410):
             r = _request('POST', f'/playlists/{playlist_id}/tracks', json={'uris': [uri]})
+        if r.status_code == 403:
+            raise SpotifyForbidden(_explain_403(r))
         if r.status_code not in (200, 201):
             raise AddFailed(f'Spotify refused the track: {r.text[:150]}')
         seen.add(uri)
