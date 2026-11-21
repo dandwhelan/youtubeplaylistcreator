@@ -547,12 +547,40 @@ def setup_browser_auth(headers_raw=None):
     return BROWSER_AUTH_FILE
 
 
+def _headers_from_curl(text):
+    """Pull 'name: value' headers out of a browser's "Copy as cURL" text.
+    Handles the bash and Windows cmd variants (cmd escapes with ^)."""
+    import shlex
+    t = text.replace('\r', '')
+    if '^"' in t:  # Windows cmd format
+        t = re.sub(r'\^\n', ' ', t)
+        t = re.sub(r'\^(.)', r'\1', t)
+    else:
+        t = t.replace('\\\n', ' ')
+    try:
+        parts = shlex.split(t)
+    except ValueError:
+        parts = t.split()
+    out = []
+    for i, part in enumerate(parts[:-1]):
+        value = parts[i + 1]
+        if part in ('-H', '--header') and ':' in value:
+            name, _, val = value.partition(':')
+            if name and not name.startswith(':'):
+                out.append(f"{name.strip().lower()}: {val.strip()}")
+        elif part in ('-b', '--cookie'):
+            out.append(f"cookie: {value}")
+    return '\n'.join(out)
+
+
 def normalize_headers(text):
     """Turn whatever the browser copied into 'name: value' lines.
 
     Handles Chrome's non-raw view, where each header name and value sit on
     separate lines, and drops HTTP/2 pseudo-headers (:authority, :path, ...)
     whose values would otherwise be mistaken for header names."""
+    if text.lstrip().lower().startswith('curl'):
+        return _headers_from_curl(text)
     lines = [l.strip() for l in text.replace('\r', '').split('\n') if l.strip()]
     if not lines:
         return text
@@ -1646,7 +1674,7 @@ Quota-free sign-in (YouTube Music browser auth)
 1. Open https://music.youtube.com in Chrome/Firefox, signed in to your account.
 2. Open DevTools (F12) > Network tab, filter for "browse".
 3. Click around (e.g. Library) until a POST request to /browse appears.
-4. Right-click it > Copy > Copy request headers (Firefox: Copy Request Headers).
+4. Right-click it > Copy > Copy as cURL (bash or cmd), or Copy request headers.
 5. Paste below, then press Enter, then Ctrl-D (Ctrl-Z then Enter on Windows).
 The headers are saved to browser.json (gitignored). They stay valid until you
 sign out of that browser session.

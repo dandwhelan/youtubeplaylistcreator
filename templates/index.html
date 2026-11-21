@@ -133,8 +133,10 @@
               <li>In that panel, click the <b>Network</b> tab. In its small search/filter box, type <code>browse</code>.</li>
               <li>On the YouTube Music page, click <b>Library</b> (left side). A line starting with
                 <b>browse</b> appears in the panel. If several do, any of them works.</li>
-              <li>Right-click that line → <b>Copy</b> → <b>Copy request headers</b>
-                (Firefox: <b>Copy Value</b> → <b>Copy Request Headers</b>).
+              <li>Right-click that line → <b>Copy</b> → <b>Copy as cURL</b>. In Edge or Chrome on Windows,
+                either <b>(bash)</b> or <b>(cmd)</b> works; avoid PowerShell. This copies everything in one go.
+                <b>Copy request headers</b> also works.
+                (Firefox: <b>Copy Value</b> → <b>Copy as cURL</b>).
                 No such option? Click the line, open the <b>Headers</b> tab (not Response or Preview),
                 scroll to the <b>Request Headers</b> section and copy all of it. It must include a
                 line starting with <code>cookie</code>. The address (Request URL) and the music data

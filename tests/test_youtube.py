@@ -160,3 +160,31 @@ def test_setup_browser_auth_accepts_chrome_split_format(tmp_path):
     saved = json.loads((tmp_path / 'browser.json').read_text())
     assert 'cookie' in {k.lower() for k in saved}
     assert not any('youtubei' in k or k.startswith(':') for k in saved)
+
+
+CURL_BASH = """curl 'https://music.youtube.com/youtubei/v1/browse?prettyPrint=false' \\
+  -H 'accept: */*' \\
+  -H 'authorization: SAPISIDHASH 1_fake' \\
+  -b 'SAPISID=fake; __Secure-3PAPISID=fake' \\
+  -H 'x-goog-authuser: 0' \\
+  --data-raw '{"context":{}}'"""
+
+CURL_CMD = """curl ^"https://music.youtube.com/youtubei/v1/browse?prettyPrint=false^" ^
+  -H ^"accept: */*^" ^
+  -H ^"authorization: SAPISIDHASH 1_fake^" ^
+  -b ^"SAPISID=fake; __Secure-3PAPISID=fake^" ^
+  -H ^"x-goog-authuser: 0^" ^
+  --data-raw ^"^{^\\^"context^\\^":^{^}^}^\""""
+
+
+@pytest.mark.parametrize('text', [CURL_BASH, CURL_CMD])
+def test_headers_from_curl(text):
+    lines = bot.normalize_headers(text).splitlines()
+    assert 'cookie: SAPISID=fake; __Secure-3PAPISID=fake' in lines
+    assert 'x-goog-authuser: 0' in lines
+    assert 'authorization: SAPISIDHASH 1_fake' in lines
+
+
+def test_setup_browser_auth_from_curl(tmp_path):
+    bot.setup_browser_auth(CURL_CMD)
+    assert (tmp_path / 'browser.json').exists()
