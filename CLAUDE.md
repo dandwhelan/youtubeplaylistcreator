@@ -20,10 +20,16 @@ Web UI (same features in the browser at http://localhost:5000):
 python app.py
 ```
 
-No build step. No test suite. Install dependencies first:
+No build step. Install dependencies first:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Tests (offline; stub every API, run in a temp dir; CI runs them via `.github/workflows/tests.yml`):
+
+```bash
+pip install pytest && pytest -q
 ```
 
 ## Architecture
@@ -34,7 +40,7 @@ The entire application lives in `bot.py` (monolithic, ~32KB). The flow is:
 2. **Input** — user picks a mode (1–9) and settings; band list loaded from `bands.txt`
 3. **Search** — `get_artist()` + `ytmusicapi` find tracks per band
 4. **Dedup** — global `added_video_ids` set prevents duplicate songs across the playlist
-5. **Add to playlist** — a *writer* inserts video IDs: `YTMusicWriter` (ytmusicapi browser auth from `browser.json`, no quota, preferred when present), `DataApiWriter` (YouTube Data API v3, 50 units/insert, tracked in `quota.json`), or `DryRunWriter` (`--dry-run`, writes nothing and never touches `progress.json`). `run_jobs()`/`process_bands()` accept a writer or a raw Data API service (wrapped via `as_writer()`)
+5. **Add to playlist** — a *writer* inserts video IDs: `YTMusicWriter` (ytmusicapi browser auth from `browser.json`, no quota, preferred when present), `DataApiWriter` (YouTube Data API v3, 50 units/insert, tracked in `quota.json`), `DryRunWriter` (`--dry-run`, writes nothing and never touches `progress.json`; with `match_spotify` it also runs Spotify search matching), or `MultiWriter` (platform `both`: composite playlist id `spotify_id|youtube_id`, a track counts as added if any platform took it). `run_jobs()`/`process_bands()` accept a writer or a raw Data API service (wrapped via `as_writer()`)
 6. **Resume** — `save_progress()` / `load_progress()` persist state to `progress.json` so a crashed run can be resumed
 
 ### The 9 Modes

@@ -67,7 +67,9 @@
 
           <h3>Other terms</h3>
           <ul class="hint steps">
-            <li><b>Dry run</b>: a preview. Shows which songs would be added without creating anything.</li>
+            <li><b>Dry run</b>: a preview. Shows which songs would be added without creating anything.
+              For Spotify, it also shows which songs Spotify has.</li>
+            <li><b>Both</b>: makes the same playlist on YouTube Music and Spotify in one go.</li>
             <li><b>Privacy</b>: <i>Private</i> = only you; <i>Unlisted</i> = anyone with the link (YouTube
               only; on Spotify it's the same as private); <i>Public</i> = shows on your profile.</li>
             <li><b>Genre Cluster</b>: sorts your bands into Metal / Rock / Punk / Electronic / Pop and makes
@@ -272,8 +274,11 @@
           <select id="opt-platform">
             <option value="youtube" selected>YouTube Music</option>
             <option value="spotify">Spotify</option>
+            <option value="both">Both (one playlist on each)</option>
           </select>
-          <p class="hint">Spotify needs a one-time setup (see API keys &amp; credentials).</p>
+          <p class="hint" id="platform-hint">Spotify needs a one-time setup (see API keys &amp; credentials).
+            <b>Both</b> picks songs with YouTube Music data and also adds each one to Spotify. Songs Spotify
+            doesn't have stay YouTube-only and are listed in the log.</p>
         </div>
         <div class="setting hidden" id="setting-source">
           <label>Pick songs using</label>
@@ -298,7 +303,9 @@
         </div>
         <div class="setting">
           <label><input type="checkbox" id="opt-dryrun"> Dry run (preview only)</label>
-          <p class="hint">Lists the tracks that would be added. Writes nothing, uses no quota.</p>
+          <p class="hint">Lists the tracks that would be added. Writes nothing, uses no quota. When saving
+            to Spotify or Both, it also checks which songs Spotify has and lists any misses, so you can
+            spot problems before creating anything.</p>
         </div>
         <div class="setting" id="setting-name">
           <label>Playlist name</label>

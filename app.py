@@ -99,20 +99,12 @@ def _load_credentials():
     return None
 
 
-def _get_youtube_or_error(platform=None):
-    """Return a playlist writer for the request's platform. For YouTube,
-    prefers the quota-free YouTube Music browser sign-in (browser.json) and
-    falls back to the Data API token."""
-    data = request.get_json(silent=True) or {}
-    if data.get('dry_run'):
-        return bot.DryRunWriter(), None
-    platform = platform or data.get('platform', 'youtube')
-    if platform == 'spotify':
-        if not spotify_sync.is_connected():
-            return None, (jsonify({'error': 'Not connected to Spotify. Open "API keys & '
-                                             'credentials", follow the Spotify steps, then '
-                                             'click "Connect Spotify".'}), 401)
-        return spotify_sync.SpotifyWriter(), None
+_SPOTIFY_NOT_CONNECTED = ('Not connected to Spotify. Open "API keys & credentials", '
+                          'follow the Spotify steps, then click "Connect Spotify".')
+
+
+def _youtube_writer(data):
+    """YouTube writer: quota-free browser sign-in if saved, else Data API."""
     if bot.has_browser_auth() and not data.get('force_data_api'):
         try:
             return bot.YTMusicWriter(), None
@@ -121,8 +113,31 @@ def _get_youtube_or_error(platform=None):
     creds = _load_credentials()
     if not creds:
         return None, (jsonify({'error': 'Not authenticated with YouTube. '
-                                         'Click "Connect YouTube" first.'}), 401)
+                                         'Click "Connect YouTube" first, or save a '
+                                         'YouTube Music sign-in.'}), 401)
     return bot.DataApiWriter(build('youtube', 'v3', credentials=creds)), None
+
+
+def _get_youtube_or_error(platform=None, source=None):
+    """Return a playlist writer for the request's platform
+    ('youtube', 'spotify' or 'both'), or a dry-run writer."""
+    data = request.get_json(silent=True) or {}
+    platform = platform or data.get('platform', 'youtube')
+    source = source or data.get('source', 'spotify')
+    if platform in ('spotify', 'both') and not spotify_sync.is_connected():
+        return None, (jsonify({'error': _SPOTIFY_NOT_CONNECTED}), 401)
+    if data.get('dry_run'):
+        match = platform == 'both' or (platform == 'spotify' and source != 'spotify')
+        return bot.DryRunWriter(match_spotify=match,
+                                require_match=platform == 'spotify'), None
+    if platform == 'spotify':
+        return spotify_sync.SpotifyWriter(), None
+    yt, err = _youtube_writer(data)
+    if err:
+        return None, err
+    if platform == 'both':
+        return bot.MultiWriter([spotify_sync.SpotifyWriter(), yt]), None
+    return yt, None
 
 
 @app.route('/api/auth/start', methods=['POST'])
@@ -403,11 +418,14 @@ def _run_state(job, youtube, state):
         job['current'] = done
         job['total'] = total
         job['band'] = band
+        label = {'youtube': 'YouTube Music', 'spotify': 'Spotify'}
         job['playlists'] = [
-            {'name': j['name'],
-             'url': youtube.playlist_url(j['playlist_id'])}
+            {'name': j['name'] + (f" ({label.get(plat, plat)})"
+                                  if youtube.platform == 'both' else ''),
+             'url': url}
             for j in state['jobs']
-            if j.get('playlist_id') and not str(j['playlist_id']).startswith('DRYRUN')]
+            if j.get('playlist_id') and not str(j['playlist_id']).startswith('DRYRUN')
+            for plat, url in bot.playlist_links(youtube, j['playlist_id'])]
         job['dupes'] = state.get('dupes', 0)
         return not job['cancel']
 
@@ -429,7 +447,8 @@ def _run_state(job, youtube, state):
 def _new_state(choice, settings, privacy, jobs):
     data = request.get_json(silent=True) or {}
     return {
-        'platform': 'spotify' if data.get('platform') == 'spotify' else 'youtube',
+        'platform': data.get('platform') if data.get('platform') in ('spotify', 'both')
+        else 'youtube',
         'choice': choice,
         'settings': settings,
         'privacy': privacy,
@@ -595,7 +614,9 @@ def resume():
     if not progress or progress['job_index'] >= len(progress['jobs']):
         return jsonify({'error': 'No saved progress found.'}), 404
 
-    youtube, auth_err = _get_youtube_or_error(progress.get('platform', 'youtube'))
+    youtube, auth_err = _get_youtube_or_error(
+        progress.get('platform', 'youtube'),
+        progress.get('settings', {}).get('source', 'youtube'))
     if auth_err:
         return auth_err
 

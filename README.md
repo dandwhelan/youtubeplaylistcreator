@@ -115,11 +115,24 @@ One-time setup (Spotify requires the developer app's owner to have **Premium**):
 
 The sign-in is cached in `spotify_token.json` (gitignored). Resume works the same as for YouTube.
 
+**Both at once:** choose **Save to → Both** (or `python bot.py --both`) to make the same playlist on YouTube Music and Spotify in one run. Songs are picked with YouTube Music data; any song Spotify doesn't have stays YouTube-only and is listed in the log.
+
+**Check before you create:** a **Dry run** with Spotify or Both selected also searches Spotify for each song and lists the ones it can't find. Nothing is created.
+
 ### Coming back after a while
 - Update the YouTube Music library first, as old versions break: `pip install -U ytmusicapi`
 - A sign-in saved more than 7 days ago has expired (Google "Testing" apps). The script notices and opens the browser to sign in again.
 - **Multi-festival support** - use any bands file, or enter bands manually
 - **Configurable** - choose how many songs per artist, how many albums to scan, custom playlist names
+
+## Running the tests
+
+```bash
+pip install pytest
+pytest -q
+```
+
+The tests are offline (every API is faked) and also run automatically on GitHub for each push and pull request.
 
 ## Prerequisites
 

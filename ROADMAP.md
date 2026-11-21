@@ -6,7 +6,7 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 
 - [ ] **Mode 4 "Deep Cuts" is weak** — current logic slices index 5–7 of `artist['songs']['results']`, which only surfaces slightly-less-popular hits. Should pull full discography (album tracks), rank by view count, and skip the top N truly popular.
 - [ ] **Progress save is O(n²)** — `save_progress` writes the full `bands` list, full log, and entire `added_video_ids` after every band. Swap for an append-only log, or only write the diff.
-- [ ] **No tests** — add smoke tests for each mode using recorded API fixtures (VCR.py / responses).
+- [x] **No tests** — offline pytest suite (resume, quota, writers, Spotify, web) + GitHub Actions. _(fixed; per-mode tests against recorded ytmusicapi fixtures still TODO)_
 - [x] **Quota visibility** — local quota tracker (`quota.json`), pre-run forecast, `--quota`, web badge. Plus quota-free writes via ytmusicapi browser auth. _(fixed)_
 - [x] **CLAUDE.md note about setlist.fm key is stale** — says hardcoded; it's actually env-var driven. _(fixed)_
 - [x] **Mode slot leak on duplicates** — if a candidate was already in the playlist, the slot was dropped silently; now we oversample and keep adding until the target count is hit. _(fixed)_

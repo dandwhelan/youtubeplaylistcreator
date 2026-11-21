@@ -246,6 +246,11 @@ class SpotifyWriter:
 
     def find_track(self, title, artist):
         """Best Spotify URI for title/artist, or None."""
+        item = self.match_track(title, artist)
+        return item['uri'] if item else None
+
+    def match_track(self, title, artist):
+        """Best Spotify track dict for title/artist, or None."""
         want_title = clean_title(title, artist)
         queries = [f'track:"{want_title}" artist:"{artist}"', f'{artist} {want_title}']
         for q in queries:
@@ -259,7 +264,7 @@ class SpotifyWriter:
                     continue
                 st, wt = _norm(it.get('name')), _norm(want_title)
                 if st == wt or st.startswith(wt) or wt.startswith(st):
-                    return it['uri']
+                    return it
         return None
 
     def add_video(self, playlist_id, video_id, band=None):

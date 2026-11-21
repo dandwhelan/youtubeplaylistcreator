@@ -402,27 +402,114 @@ class YTMusicWriter:
 
 class DryRunWriter:
     """Pretends to write: prints what would be added. Costs nothing and
-    never touches progress.json."""
+    never touches progress.json.
+
+    With `match_spotify`, each YouTube pick is also looked up on Spotify
+    (search only, nothing written) so the preview shows which songs Spotify
+    has. With `require_match` (saving to Spotify only), a song with no match
+    is treated like a real run would: skipped, and the band's next song tried."""
     name = 'Dry run (nothing is written)'
     uses_quota = False
     dry_run = True
     platform = 'youtube'
     playlist_url = staticmethod(lambda pid: f"(preview) {pid}")
 
-    def __init__(self):
+    def __init__(self, match_spotify=False, require_match=False):
         self.tracks = []
+        self.misses = []
+        self.warning = None
+        self.spotify = None
+        self.require_match = require_match
+        if match_spotify:
+            from spotify_sync import SpotifyWriter
+            self.spotify = SpotifyWriter()
+            self.name = 'Dry run with Spotify match check (nothing is written)'
 
     def create_playlist(self, name, description, privacy):
         return f"DRYRUN-{len(self.tracks)}"
 
     def add_video(self, playlist_id, video_id, band=None):
-        self.tracks.append(video_id)
+        self.warning = None
         title = _track_titles.get(video_id, '')
         if str(video_id).startswith('spotify:track:'):
             link = f"https://open.spotify.com/track/{video_id.split(':')[-1]}"
         else:
             link = f"https://music.youtube.com/watch?v={video_id}"
-        print(f"    would add {title or video_id}  {link}")
+        extra = ''
+        if self.spotify and not str(video_id).startswith('spotify:track:'):
+            title = title or track_title(video_id)
+            item = self.spotify.match_track(title, band or '')
+            if item:
+                extra = f"  -> Spotify: {item.get('name')}"
+            else:
+                miss = f"{band}: {title or video_id}"
+                self.misses.append(miss)
+                if self.require_match:
+                    print(f"    no Spotify match: {title or video_id} (trying next song)")
+                    raise AddFailed("no Spotify match")
+                extra = "  -> Spotify: NO MATCH (YouTube only)"
+                self.warning = f"No Spotify match for {title or video_id} ({band})"
+        self.tracks.append(video_id)
+        print(f"    would add {title or video_id}  {link}{extra}")
+
+
+class MultiWriter:
+    """Saves every track to several platforms at once (YouTube Music +
+    Spotify). The playlist id is the platforms' ids joined with '|'. A track
+    counts as added if at least one platform took it; misses on the other
+    are logged."""
+    dry_run = False
+    platform = 'both'
+
+    def __init__(self, writers):
+        self.writers = writers
+        self.warning = None
+
+    @property
+    def name(self):
+        return ' + '.join(w.name for w in self.writers)
+
+    @property
+    def uses_quota(self):
+        return any(w.uses_quota for w in self.writers)
+
+    def create_playlist(self, name, description, privacy):
+        return '|'.join(w.create_playlist(name, description, privacy)
+                        for w in self.writers)
+
+    def _ids(self, playlist_id):
+        ids = str(playlist_id).split('|')
+        if len(ids) != len(self.writers):
+            raise RuntimeError(f"Saved playlist id {playlist_id!r} doesn't match "
+                               f"{len(self.writers)} platforms")
+        return ids
+
+    def links(self, playlist_id):
+        return [(w.platform, w.playlist_url(pid))
+                for w, pid in zip(self.writers, self._ids(playlist_id))]
+
+    def playlist_url(self, playlist_id):
+        return '  |  '.join(url for _, url in self.links(playlist_id))
+
+    def add_video(self, playlist_id, video_id, band=None):
+        self.warning = None
+        failures = []
+        for w, pid in zip(self.writers, self._ids(playlist_id)):
+            try:
+                w.add_video(pid, video_id, band=band)
+            except AddFailed as e:
+                failures.append(f"{w.platform}: {e}")
+        if len(failures) == len(self.writers):
+            raise AddFailed('; '.join(failures))
+        if failures:
+            self.warning = f"Only partly added {video_id} for {band} ({'; '.join(failures)})"
+
+
+def playlist_links(writer, playlist_id):
+    """[(platform, url), ...] for a playlist id."""
+    if hasattr(writer, 'links'):
+        return writer.links(playlist_id)
+    return [(writer.platform, writer.playlist_url(playlist_id))]
 
 
 def as_writer(obj):
@@ -1359,7 +1446,10 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
                 seen_videos.add(v_id)
                 partial.append(v_id)
                 job['added_video_ids'].append(v_id)
-                log_entries.append(f"Added video {v_id} for {band}")
+                verb = 'Would add' if writer.dry_run else 'Added'
+                log_entries.append(f"{verb} {_track_titles.get(v_id) or v_id} ({v_id}) for {band}")
+                if getattr(writer, 'warning', None):
+                    log_entries.append(writer.warning)
                 added += 1
                 save(state)
             dupes_skipped += dupes_in_band
@@ -1483,6 +1573,15 @@ def run_jobs(youtube, state, progress_callback=None):
     if writer.dry_run:
         print(f"\nDry run complete: {len(writer.tracks)} track(s) would be added. "
               "Nothing was written.")
+        if writer.spotify:
+            summary = (f"Spotify match check: {len(writer.misses)} song(s) had no "
+                       "Spotify match" + (" (replaced with the next song)."
+                                          if writer.require_match else "."))
+            print(summary)
+            log_entries.append(summary)
+            for miss in writer.misses:
+                print(f"  no match: {miss}")
+                log_entries.append(f"  no Spotify match: {miss}")
         return 'done'
     clear_progress()
     total_bands = sum(len(j['bands']) for j in jobs)
@@ -1547,10 +1646,12 @@ def main():
     args = set(sys.argv[1:])
     if '--help' in args or '-h' in args:
         print("Usage: python bot.py [--dry-run] [--setup-browser] [--quota] [--data-api]"
-              " [--spotify] [--spotify-login]\n"
+              " [--spotify] [--both] [--spotify-login]\n"
               "  --spotify        save the playlist to Spotify instead of YouTube Music\n"
+              "  --both           save to YouTube Music and Spotify at once\n"
               "  --spotify-login  sign in to Spotify (needs a Spotify Client ID, see README)\n"
-              "  --dry-run        show what would be added; writes nothing, no quota used\n"
+              "  --dry-run        show what would be added (and, for Spotify, which songs\n"
+              "                   Spotify has); writes nothing, no quota used\n"
               "  --setup-browser  save YouTube Music sign-in to browser.json (no daily quota)\n"
               "  --quota          show today's estimated YouTube Data API quota usage\n"
               "  --data-api       force the YouTube Data API even if browser.json exists")
@@ -1590,25 +1691,37 @@ def main():
     dry_run = '--dry-run' in args
     use_browser = has_browser_auth() and '--data-api' not in args
 
-    def make_writer(platform='youtube'):
-        if dry_run:
-            return DryRunWriter()
-        if platform == 'spotify':
-            import spotify_sync
-            if not spotify_sync.is_connected():
-                print("Not signed in to Spotify yet.")
-                if not spotify_sync.client_id():
-                    print(SPOTIFY_SETUP_HELP)
-                    cid = input("Paste your Spotify Client ID: ").strip()
-                    from config import set_key
-                    set_key('SPOTIFY_CLIENT_ID', cid)
-                spotify_sync.cli_login()
-            return spotify_sync.SpotifyWriter()
+    def spotify_writer():
+        import spotify_sync
+        if not spotify_sync.is_connected():
+            print("Not signed in to Spotify yet.")
+            if not spotify_sync.client_id():
+                print(SPOTIFY_SETUP_HELP)
+                cid = input("Paste your Spotify Client ID: ").strip()
+                from config import set_key
+                set_key('SPOTIFY_CLIENT_ID', cid)
+            spotify_sync.cli_login()
+        return spotify_sync.SpotifyWriter()
+
+    def youtube_writer():
         if use_browser:
             return get_playlist_writer()
         return DataApiWriter(get_youtube_service())
 
-    platform = 'spotify' if '--spotify' in args else None
+    def make_writer(platform='youtube', source='youtube'):
+        if dry_run:
+            if platform in ('spotify', 'both') and source != 'spotify':
+                spotify_writer()  # make sure we're signed in for the match check
+                return DryRunWriter(match_spotify=True,
+                                    require_match=platform == 'spotify')
+            return DryRunWriter()
+        if platform == 'spotify':
+            return spotify_writer()
+        if platform == 'both':
+            return MultiWriter([spotify_writer(), youtube_writer()])
+        return youtube_writer()
+
+    platform = 'spotify' if '--spotify' in args else ('both' if '--both' in args else None)
 
     # --- Check for resume ---
     progress = load_progress()
@@ -1622,24 +1735,29 @@ def main():
               f"band {job['band_index']}/{len(job['bands'])} done")
         answer = input("Resume previous session? [y/n]: ").strip().lower()
         if answer == 'y':
-            run_jobs(make_writer(progress.get('platform', 'youtube')), progress)
+            run_jobs(make_writer(progress.get('platform', 'youtube'),
+                                 progress.get('settings', {}).get('source', 'youtube')),
+                     progress)
             return
         clear_progress()
 
     # --- Fresh run ---
-    if platform is None and not dry_run:
+    if platform is None:
         print("\nWhere should the playlist be saved?")
         print("  1. YouTube Music")
         print("  2. Spotify")
-        platform = 'spotify' if input("Enter choice (1-2, default 1): ").strip() == '2' else 'youtube'
-    platform = platform or 'youtube'
+        print("  3. Both (one playlist on each)")
+        platform = {'2': 'spotify', '3': 'both'}.get(
+            input("Enter choice (1-3, default 1): ").strip(), 'youtube')
     source = 'youtube'
     if platform == 'spotify':
         print("\nPick songs using which data?")
         print("  1. Spotify (default) - every pick is a real Spotify track, nothing lost to matching")
         print("  2. YouTube Music     - uses YouTube view counts, then matches each song on Spotify")
         source = 'youtube' if input("Enter choice (1-2, default 1): ").strip() == '2' else 'spotify'
-    if platform == 'youtube' and not dry_run and not use_browser \
+    elif platform == 'both':
+        print("Songs are picked with YouTube Music data and matched on Spotify.")
+    if platform in ('youtube', 'both') and not dry_run and not use_browser \
             and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
         print("Error: no client_secret*.json file found and no YouTube Music sign-in.")
         print("Run `python bot.py --setup-browser` (easiest, no quota), or put the Google")
@@ -1719,7 +1837,7 @@ def main():
         'log_entries': [],
     }
 
-    run_jobs(make_writer(platform), state)
+    run_jobs(make_writer(platform, source), state)
 
 
 if __name__ == '__main__':

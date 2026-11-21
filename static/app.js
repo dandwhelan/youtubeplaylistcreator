@@ -88,7 +88,7 @@ async function loadStatus() {
 
   if (s.progress && s.job_state !== 'running') {
     $('resume-text').textContent =
-      `Unfinished ${s.progress.platform === 'spotify' ? 'Spotify' : 'YouTube'} run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
+      `Unfinished ${({spotify: 'Spotify', both: 'YouTube + Spotify'})[s.progress.platform] || 'YouTube'} run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
       ` "${s.progress.playlist}", band ${s.progress.band_index}/${s.progress.total} done.`;
     $('resume-banner').classList.remove('hidden');
   } else {
