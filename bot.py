@@ -57,6 +57,48 @@ INSERT_COST = 50
 SCOPES = ['https://www.googleapis.com/auth/youtube']
 ytmusic = YTMusic()
 
+# Titles of every track the modes have seen, by videoId. Spotify output
+# needs the title to find the same song there.
+_track_titles = {}
+
+
+def _note_titles(obj, depth=0):
+    if depth > 6:
+        return
+    if isinstance(obj, dict):
+        vid, title = obj.get('videoId'), obj.get('title')
+        if vid and isinstance(title, str):
+            _track_titles.setdefault(vid, title)
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                _note_titles(v, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _note_titles(v, depth + 1)
+
+
+def _noting(fn):
+    def wrapper(*args, **kwargs):
+        result = fn(*args, **kwargs)
+        _note_titles(result)
+        return result
+    return wrapper
+
+
+for _m in ('get_artist', 'get_album', 'get_playlist', 'search'):
+    setattr(ytmusic, _m, _noting(getattr(ytmusic, _m)))
+
+
+def track_title(video_id):
+    """Title for a videoId (from what the modes already fetched, else a lookup)."""
+    if video_id not in _track_titles:
+        try:
+            details = ytmusic.get_song(video_id).get('videoDetails', {})
+            _track_titles[video_id] = details.get('title', '')
+        except Exception:
+            return ''
+    return _track_titles[video_id]
+
 # Keywords that indicate an album is a reissue/variant, not an original release
 ALBUM_VARIANT_KEYWORDS = [
     'deluxe', 'bonus track', 'remix', 'remixed', 'live at', 'live in',
@@ -273,6 +315,8 @@ class DataApiWriter:
     name = 'YouTube Data API'
     uses_quota = True
     dry_run = False
+    platform = 'youtube'
+    playlist_url = staticmethod(lambda pid: f"https://music.youtube.com/playlist?list={pid}")
 
     def __init__(self, youtube):
         self.youtube = youtube
@@ -298,7 +342,7 @@ class DataApiWriter:
             }
         ))['id']
 
-    def add_video(self, playlist_id, video_id):
+    def add_video(self, playlist_id, video_id, band=None):
         try:
             self._execute(self.youtube.playlistItems().insert(
                 part="snippet",
@@ -319,6 +363,8 @@ class YTMusicWriter:
     name = 'YouTube Music (no quota)'
     uses_quota = False
     dry_run = False
+    platform = 'youtube'
+    playlist_url = staticmethod(lambda pid: f"https://music.youtube.com/playlist?list={pid}")
 
     def __init__(self, auth_file=BROWSER_AUTH_FILE):
         self.yt = YTMusic(auth_file)
@@ -342,7 +388,7 @@ class YTMusicWriter:
             raise RuntimeError(f"YouTube Music refused to create the playlist: {result}")
         return result
 
-    def add_video(self, playlist_id, video_id):
+    def add_video(self, playlist_id, video_id, band=None):
         try:
             result = self._call(self.yt.add_playlist_items, playlist_id,
                                 [video_id], duplicates=True)
@@ -360,6 +406,8 @@ class DryRunWriter:
     name = 'Dry run (nothing is written)'
     uses_quota = False
     dry_run = True
+    platform = 'youtube'
+    playlist_url = staticmethod(lambda pid: f"(preview) {pid}")
 
     def __init__(self):
         self.tracks = []
@@ -367,9 +415,10 @@ class DryRunWriter:
     def create_playlist(self, name, description, privacy):
         return f"DRYRUN-{len(self.tracks)}"
 
-    def add_video(self, playlist_id, video_id):
+    def add_video(self, playlist_id, video_id, band=None):
         self.tracks.append(video_id)
-        print(f"    would add https://music.youtube.com/watch?v={video_id}")
+        title = _track_titles.get(video_id, '')
+        print(f"    would add {title or video_id}  https://music.youtube.com/watch?v={video_id}")
 
 
 def as_writer(obj):
@@ -381,8 +430,12 @@ def has_browser_auth():
     return os.path.exists(BROWSER_AUTH_FILE)
 
 
-def get_playlist_writer():
-    """Prefer the quota-free YouTube Music writer when browser auth exists."""
+def get_playlist_writer(platform='youtube'):
+    """Writer for `platform`. For YouTube, prefer the quota-free YouTube
+    Music writer when browser auth exists."""
+    if platform == 'spotify':
+        from spotify_sync import SpotifyWriter
+        return SpotifyWriter()
     if has_browser_auth():
         try:
             return YTMusicWriter()
@@ -1274,7 +1327,7 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
                     dupes_in_band += 1
                     continue
                 try:
-                    writer.add_video(playlist_id, v_id)
+                    writer.add_video(playlist_id, v_id, band=band)
                 except QuotaExceeded:
                     dupes_skipped += dupes_in_band
                     raise
@@ -1352,13 +1405,13 @@ def run_jobs(youtube, state, progress_callback=None):
                 job['playlist_id'] = writer.create_playlist(
                     job['name'], job['description'],
                     state.get('privacy', PLAYLIST_PRIVACY))
-                url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
+                url = writer.playlist_url(job['playlist_id'])
                 print(f"\nPlaylist '{job['name']}' created: {url}\n")
                 log_entries.extend(job.get('header', []))
                 log_entries.append(f"Playlist URL: {url}\n")
                 save(state)
             else:
-                url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
+                url = writer.playlist_url(job['playlist_id'])
                 print(f"\nContinuing playlist '{job['name']}': {url}\n")
             if progress_callback and progress_callback(
                     job['band_index'], len(job['bands']), '') is False:
@@ -1369,11 +1422,14 @@ def run_jobs(youtube, state, progress_callback=None):
             log_entries.append("")
             state['job_index'] += 1
             save(state)
-    except QuotaExceeded:
-        stopped = ("YouTube's daily API quota is used up (about 199 track adds "
-                   "per day on a default project). It resets at midnight "
-                   "Pacific time. Tip: run `python bot.py --setup-browser` once "
-                   "to write via YouTube Music instead, which has no daily quota.")
+    except QuotaExceeded as e:
+        if writer.platform == 'spotify':
+            stopped = f"{e} Progress is saved; resume later."
+        else:
+            stopped = ("YouTube's daily API quota is used up (about 199 track adds "
+                       "per day on a default project). It resets at midnight "
+                       "Pacific time. Tip: run `python bot.py --setup-browser` once "
+                       "to write via YouTube Music instead, which has no daily quota.")
         result = 'quota'
     except AuthExpired as e:
         stopped = (f"Sign-in expired mid-run ({str(e)[:160]}). Sign in again "
@@ -1414,7 +1470,7 @@ def run_jobs(youtube, state, progress_callback=None):
     total_bands = sum(len(j['bands']) for j in jobs)
     print(f"\nDone! {total_bands} bands processed. {state.get('dupes', 0)} duplicate(s) skipped.")
     for job in jobs:
-        print(f"  {job['name']}: https://music.youtube.com/playlist?list={job['playlist_id']}")
+        print(f"  {job['name']}: {writer.playlist_url(job['playlist_id'])}")
     if match_warnings:
         print(f"\n{len(match_warnings)} band(s) had no exact artist name match - "
               f"check them in {LOG_FILE}.")
@@ -1455,10 +1511,27 @@ sign out of that browser session.
 """
 
 
+SPOTIFY_SETUP_HELP = """
+Spotify setup (one time, about 3 minutes)
+-----------------------------------------
+Spotify only lets apps owned by a Premium account use its API.
+1. Go to https://developer.spotify.com/dashboard and log in.
+2. Click "Create app". Any name/description.
+3. Redirect URIs - add both of these exactly:
+     http://127.0.0.1:8888/callback
+     http://127.0.0.1:5000/spotify/callback
+4. Tick "Web API", accept the terms, Save.
+5. Open the app's Settings and copy the "Client ID" (no secret needed).
+"""
+
+
 def main():
     args = set(sys.argv[1:])
     if '--help' in args or '-h' in args:
-        print("Usage: python bot.py [--dry-run] [--setup-browser] [--quota] [--data-api]\n"
+        print("Usage: python bot.py [--dry-run] [--setup-browser] [--quota] [--data-api]"
+              " [--spotify] [--spotify-login]\n"
+              "  --spotify        save the playlist to Spotify instead of YouTube Music\n"
+              "  --spotify-login  sign in to Spotify (needs a Spotify Client ID, see README)\n"
               "  --dry-run        show what would be added; writes nothing, no quota used\n"
               "  --setup-browser  save YouTube Music sign-in to browser.json (no daily quota)\n"
               "  --quota          show today's estimated YouTube Data API quota usage\n"
@@ -1480,21 +1553,44 @@ def main():
             print(f"{BROWSER_AUTH_FILE} found: runs write via YouTube Music and skip this quota.")
         return
 
+    if '--spotify-login' in args:
+        import spotify_sync
+        if not spotify_sync.client_id():
+            print(SPOTIFY_SETUP_HELP)
+            cid = input("Paste your Spotify Client ID: ").strip()
+            if not cid:
+                return
+            from config import set_key
+            set_key('SPOTIFY_CLIENT_ID', cid)
+        try:
+            spotify_sync.cli_login()
+            print("Spotify connected. Run `python bot.py --spotify` to make a Spotify playlist.")
+        except Exception as e:
+            print(f"Spotify sign-in failed: {e}")
+        return
+
     dry_run = '--dry-run' in args
     use_browser = has_browser_auth() and '--data-api' not in args
 
-    def make_writer():
+    def make_writer(platform='youtube'):
         if dry_run:
             return DryRunWriter()
+        if platform == 'spotify':
+            import spotify_sync
+            if not spotify_sync.is_connected():
+                print("Not signed in to Spotify yet.")
+                if not spotify_sync.client_id():
+                    print(SPOTIFY_SETUP_HELP)
+                    cid = input("Paste your Spotify Client ID: ").strip()
+                    from config import set_key
+                    set_key('SPOTIFY_CLIENT_ID', cid)
+                spotify_sync.cli_login()
+            return spotify_sync.SpotifyWriter()
         if use_browser:
             return get_playlist_writer()
         return DataApiWriter(get_youtube_service())
 
-    if not dry_run and not use_browser and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
-        print(f"Error: no client_secret*.json file found in the current directory.")
-        print("Download it from Google Cloud Console (see README) and place it here,")
-        print("or run `python bot.py --setup-browser` to sign in without one (no quota).")
-        return
+    platform = 'spotify' if '--spotify' in args else None
 
     # --- Check for resume ---
     progress = load_progress()
@@ -1508,11 +1604,24 @@ def main():
               f"band {job['band_index']}/{len(job['bands'])} done")
         answer = input("Resume previous session? [y/n]: ").strip().lower()
         if answer == 'y':
-            run_jobs(make_writer(), progress)
+            run_jobs(make_writer(progress.get('platform', 'youtube')), progress)
             return
         clear_progress()
 
     # --- Fresh run ---
+    if platform is None and not dry_run:
+        print("\nWhere should the playlist be saved?")
+        print("  1. YouTube Music")
+        print("  2. Spotify")
+        platform = 'spotify' if input("Enter choice (1-2, default 1): ").strip() == '2' else 'youtube'
+    platform = platform or 'youtube'
+    if platform == 'youtube' and not dry_run and not use_browser \
+            and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+        print("Error: no client_secret*.json file found and no YouTube Music sign-in.")
+        print("Run `python bot.py --setup-browser` (easiest, no quota), or put the Google")
+        print("key file here (see README).")
+        return
+
     bands = get_bands()
     if not bands:
         print("No bands to process.")
@@ -1575,6 +1684,7 @@ def main():
         )]
 
     state = {
+        'platform': platform,
         'choice': choice,
         'settings': settings,
         'privacy': get_privacy(),
@@ -1583,7 +1693,7 @@ def main():
         'log_entries': [],
     }
 
-    run_jobs(make_writer(), state)
+    run_jobs(make_writer(platform), state)
 
 
 if __name__ == '__main__':

@@ -101,6 +101,17 @@ The headers are saved to `browser.json` (gitignored) and used automatically from
 - `python bot.py --dry-run` (or the **Dry run** checkbox) previews the tracklist without writing anything or using quota.
 - **One Hit Sampler** finishes long band lists in one day.
 
+### Saving to Spotify
+Pick **Save to → Spotify** in the web UI, or run `python bot.py --spotify` (the CLI also asks at the start). Songs are still chosen by the normal modes, then matched on Spotify by band and title. Songs with no Spotify match are skipped and the band's next song is used instead.
+
+One-time setup (Spotify requires the developer app's owner to have **Premium**):
+1. Go to https://developer.spotify.com/dashboard → **Create app** (any name).
+2. Add the redirect URIs `http://127.0.0.1:5000/spotify/callback` (web UI) and `http://127.0.0.1:8888/callback` (CLI). They must use `127.0.0.1`, because Spotify rejects `localhost`.
+3. Tick **Web API**, save, then copy the **Client ID** (no secret needed).
+4. Web UI: paste it under **API keys & credentials → Spotify**, then **Connect Spotify**. CLI: `python bot.py --spotify-login`.
+
+The sign-in is cached in `spotify_token.json` (gitignored). Resume works the same as for YouTube.
+
 ### Coming back after a while
 - Update the YouTube Music library first, as old versions break: `pip install -U ytmusicapi`
 - A sign-in saved more than 7 days ago has expired (Google "Testing" apps). The script notices and opens the browser to sign in again.

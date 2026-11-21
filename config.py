@@ -11,7 +11,7 @@ import os
 SETTINGS_FILE = 'settings.json'
 
 # Keys the web UI is allowed to read/write.
-MANAGED_KEYS = ('SETLIST_FM_API_KEY', 'GEMINI_API_KEY', 'YOUTUBE_DAILY_QUOTA')
+MANAGED_KEYS = ('SETLIST_FM_API_KEY', 'GEMINI_API_KEY', 'YOUTUBE_DAILY_QUOTA', 'SPOTIFY_CLIENT_ID')
 
 
 def load_settings():

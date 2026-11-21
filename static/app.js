@@ -59,7 +59,7 @@ async function loadStatus() {
   } else {
     authPill.textContent = s.has_client_secret
       ? 'YouTube: not connected'
-      : 'YouTube: Google key file missing (click for steps)';
+      : 'YouTube: not set up (click for steps)';
     authPill.className = 'pill bad';
     $('btn-connect').classList.toggle('hidden', !s.has_client_secret);
   }
@@ -68,6 +68,14 @@ async function loadStatus() {
   $('pill-setlist').className = 'pill ' + (s.setlist_key ? 'ok' : '');
   $('pill-gemini').textContent = s.gemini_key ? 'Gemini ✓' : 'Gemini key not set (optional)';
   $('pill-gemini').className = 'pill ' + (s.gemini_key ? 'ok' : '');
+
+  const sp = $('pill-spotify');
+  sp.textContent = s.spotify_connected ? 'Spotify ✓'
+    : (s.spotify_client_id ? 'Spotify: not connected' : 'Spotify not set up (optional)');
+  sp.className = 'pill ' + (s.spotify_connected ? 'ok' : '');
+  $('sp-status').textContent = s.spotify_connected ? 'connected'
+    : (s.spotify_client_id ? 'Client ID saved, click Connect Spotify' : 'not set up');
+  $('sp-status').className = s.spotify_connected ? 'status-ok' : 'status-warn';
 
   const qp = $('pill-quota');
   if (s.browser_auth) {
@@ -80,7 +88,7 @@ async function loadStatus() {
 
   if (s.progress && s.job_state !== 'running') {
     $('resume-text').textContent =
-      `Unfinished run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
+      `Unfinished ${s.progress.platform === 'spotify' ? 'Spotify' : 'YouTube'} run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
       ` "${s.progress.playlist}", band ${s.progress.band_index}/${s.progress.total} done.`;
     $('resume-banner').classList.remove('hidden');
   } else {
@@ -157,6 +165,7 @@ $('btn-save-keys').onclick = async () => {
   const body = {};
   if ($('key-setlist').value.trim()) body.SETLIST_FM_API_KEY = $('key-setlist').value.trim();
   if ($('key-gemini').value.trim()) body.GEMINI_API_KEY = $('key-gemini').value.trim();
+  if ($('key-spotify').value.trim()) body.SPOTIFY_CLIENT_ID = $('key-spotify').value.trim();
   if (!Object.keys(body).length) {
     $('keys-msg').textContent = 'Nothing to save — paste a key first.';
     return;
@@ -165,6 +174,7 @@ $('btn-save-keys').onclick = async () => {
     await postJSON('/api/keys', body);
     $('key-setlist').value = '';
     $('key-gemini').value = '';
+    $('key-spotify').value = '';
     $('keys-msg').textContent = 'Saved.';
     loadKeys();
     loadStatus();
@@ -212,6 +222,34 @@ $('btn-ba-remove').onclick = async () => {
     $('ba-msg').textContent = e.message;
   }
 };
+
+$('btn-sp-connect').onclick = async () => {
+  if ($('key-spotify').value.trim()) {
+    await postJSON('/api/keys', { SPOTIFY_CLIENT_ID: $('key-spotify').value.trim() });
+    $('key-spotify').value = '';
+  }
+  try {
+    const data = await postJSON('/api/spotify/start', {});
+    window.location.href = data.auth_url;
+  } catch (e) {
+    $('sp-msg').textContent = e.message;
+  }
+};
+
+$('btn-sp-disconnect').onclick = async () => {
+  if (!confirm('Disconnect Spotify from this app?')) return;
+  await postJSON('/api/spotify/disconnect', {});
+  $('sp-msg').textContent = 'Disconnected.';
+  loadStatus();
+};
+
+$('btn-help').onclick = () => {
+  $('help-details').open = true;
+  $('help-details').scrollIntoView({ behavior: 'smooth' });
+};
+
+// Show the exact redirect URI for the port this app is running on.
+$('sp-redirect').textContent = `http://127.0.0.1:${window.location.port || 80}/spotify/callback`;
 
 $('btn-cs-upload').onclick = async () => {
   const file = $('cs-file').files[0];
@@ -370,6 +408,7 @@ function collectSettings() {
   }
   settings.privacy = $('opt-privacy').value;
   settings.dry_run = $('opt-dryrun').checked;
+  settings.platform = $('opt-platform').value;
   return settings;
 }
 
@@ -561,7 +600,7 @@ loadKeys();
 
 // Status badges in the header open the setup panel, which has the steps
 // and links for each key.
-['pill-auth', 'pill-setlist', 'pill-gemini', 'pill-quota'].forEach((id) => {
+['pill-auth', 'pill-setlist', 'pill-gemini', 'pill-quota', 'pill-spotify'].forEach((id) => {
   $(id).onclick = () => {
     $('keys-details').open = true;
     $('keys-details').scrollIntoView({ behavior: 'smooth' });

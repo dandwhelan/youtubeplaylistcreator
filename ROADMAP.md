@@ -35,6 +35,7 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 - [ ] **Config file (`config.yaml`)** — supply mode, counts, year range, playlist name via config for scripted re-runs.
 
 ### Output / Sharing
-- [ ] **Multi-platform export** — also create Spotify / Apple Music / Tidal playlists from the same run.
+- [x] **Spotify export** _(shipped: Save to → Spotify / `--spotify`)_
+- [ ] **Multi-platform export** — Apple Music / Tidal playlists from the same run.
 - [ ] **CSV export** of the final tracklist (artist, title, album, year, duration, video ID).
 - [ ] **Markdown report** with album art, track durations, and release years.

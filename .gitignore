@@ -8,3 +8,5 @@ progress.json
 settings.json
 browser.json
 quota.json
+spotify_token.json
+progress.json.tmp
