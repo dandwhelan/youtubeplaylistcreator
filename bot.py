@@ -541,8 +541,33 @@ def setup_browser_auth(headers_raw=None):
     music.youtube.com tab (DevTools > Network > a POST to /browse >
     Copy request headers). With no argument, prompts in the terminal."""
     import ytmusicapi
+    if headers_raw is not None:
+        headers_raw = normalize_headers(headers_raw)
     ytmusicapi.setup(filepath=BROWSER_AUTH_FILE, headers_raw=headers_raw)
     return BROWSER_AUTH_FILE
+
+
+def normalize_headers(text):
+    """Turn whatever the browser copied into 'name: value' lines.
+
+    Handles Chrome's non-raw view, where each header name and value sit on
+    separate lines, and drops HTTP/2 pseudo-headers (:authority, :path, ...)
+    whose values would otherwise be mistaken for header names."""
+    lines = [l.strip() for l in text.replace('\r', '').split('\n') if l.strip()]
+    if not lines:
+        return text
+    if sum(': ' in l and not l.startswith(':') for l in lines) >= len(lines) / 2:
+        out = [l for l in lines if not l.startswith(':')]  # already name: value
+    else:
+        out, i = [], 0
+        while i < len(lines):
+            name = lines[i].rstrip(':')
+            value = lines[i + 1] if i + 1 < len(lines) else ''
+            i += 2
+            if name.startswith(':') or not name:
+                continue
+            out.append(f"{name.lower()}: {value}")
+    return '\n'.join(out)
 
 
 def create_playlist(youtube, name, description, privacy=PLAYLIST_PRIVACY):
