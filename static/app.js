@@ -243,6 +243,10 @@ $('btn-sp-disconnect').onclick = async () => {
   loadStatus();
 };
 
+$('opt-platform').onchange = () => {
+  $('setting-source').classList.toggle('hidden', $('opt-platform').value !== 'spotify');
+};
+
 $('btn-help').onclick = () => {
   $('help-details').open = true;
   $('help-details').scrollIntoView({ behavior: 'smooth' });
@@ -409,6 +413,7 @@ function collectSettings() {
   settings.privacy = $('opt-privacy').value;
   settings.dry_run = $('opt-dryrun').checked;
   settings.platform = $('opt-platform').value;
+  settings.source = $('opt-source').value;
   return settings;
 }
 

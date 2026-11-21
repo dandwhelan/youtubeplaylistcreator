@@ -418,7 +418,11 @@ class DryRunWriter:
     def add_video(self, playlist_id, video_id, band=None):
         self.tracks.append(video_id)
         title = _track_titles.get(video_id, '')
-        print(f"    would add {title or video_id}  https://music.youtube.com/watch?v={video_id}")
+        if str(video_id).startswith('spotify:track:'):
+            link = f"https://open.spotify.com/track/{video_id.split(':')[-1]}"
+        else:
+            link = f"https://music.youtube.com/watch?v={video_id}"
+        print(f"    would add {title or video_id}  {link}")
 
 
 def as_writer(obj):
@@ -860,14 +864,15 @@ def _setlist_get(url, headers, params):
     return resp
 
 
-def get_setlist_tracks(band_name, count=3):
-    """Mode 8: Most commonly played live songs (via setlist.fm API)."""
+def setlist_song_names(band_name, count=3):
+    """Most-played live song names for a band from setlist.fm, or None if
+    unavailable (no key, not found, API error)."""
     print(f"  Searching setlist data: {band_name}")
 
     api_key = get_key('SETLIST_FM_API_KEY')
     if not api_key:
         print("    SETLIST_FM_API_KEY not set - falling back to top popular")
-        return get_top_popular(band_name, count)
+        return None
 
     headers = {
         'Accept': 'application/json',
@@ -883,17 +888,17 @@ def get_setlist_tracks(band_name, count=3):
         )
         if resp.status_code != 200:
             print(f"    setlist.fm search failed ({resp.status_code}), falling back")
-            return get_top_popular(band_name, count)
+            return None
 
         artists = resp.json().get('artist', [])
         if not artists:
             print(f"    Not found on setlist.fm, falling back")
-            return get_top_popular(band_name, count)
+            return None
 
         artist_mbid = artists[0]['mbid']
     except Exception as e:
         print(f"    setlist.fm error: {e}, falling back")
-        return get_top_popular(band_name, count)
+        return None
 
     # Fetch recent setlists
     try:
@@ -903,11 +908,11 @@ def get_setlist_tracks(band_name, count=3):
             params={'p': 1},
         )
         if resp.status_code != 200:
-            return get_top_popular(band_name, count)
+            return None
 
         setlists = resp.json().get('setlist', [])
     except Exception:
-        return get_top_popular(band_name, count)
+        return None
 
     # Count song occurrences across the last 10 shows
     song_counts = Counter()
@@ -923,10 +928,18 @@ def get_setlist_tracks(band_name, count=3):
                     song_counts[name] += 1
 
     if not song_counts:
+        return None
+
+    return [name for name, _ in song_counts.most_common(count)]
+
+
+def get_setlist_tracks(band_name, count=3):
+    """Mode 8: Most commonly played live songs (via setlist.fm API)."""
+    top_song_names = setlist_song_names(band_name, count)
+    if not top_song_names:
         return get_top_popular(band_name, count)
 
     # Find the most commonly played songs on YouTube Music
-    top_song_names = [name for name, _ in song_counts.most_common(count)]
     video_ids = []
     want = _norm_name(band_name)
     for song_name in top_song_names:
@@ -1257,6 +1270,9 @@ def call_track_mode(choice, settings, band_name):
     For count-based modes we oversample so duplicates can be replaced with
     the next-best alternate instead of leaving the slot empty."""
     func = TRACK_MODES[choice]['func']
+    if settings.get('source') == 'spotify':
+        import spotify_sync
+        func = spotify_sync.SPOTIFY_MODES[choice]
 
     if choice == '3':
         return func(band_name, max_albums=settings.get('max_albums', 5))
@@ -1301,6 +1317,8 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
 
         try:
             video_ids = call_track_mode(choice, settings, band)
+        except (AuthExpired, TemporaryFailure, QuotaExceeded):
+            raise  # stop the run resumably, don't fail every band one by one
         except Exception as e:
             log_entries.append(f"Error on {band}: {e}")
             print(f"  Error: {e}")
@@ -1433,8 +1451,8 @@ def run_jobs(youtube, state, progress_callback=None):
         result = 'quota'
     except AuthExpired as e:
         stopped = (f"Sign-in expired mid-run ({str(e)[:160]}). Sign in again "
-                   "(the CLI asks automatically; in the web UI click Connect "
-                   "YouTube or re-save the YouTube Music sign-in), then resume.")
+                   "(the CLI asks automatically; in the web UI use Connect YouTube, "
+                   "Connect Spotify, or re-save the YouTube Music sign-in), then resume.")
         result = 'auth'
     except TemporaryFailure as e:
         stopped = f"Network/server trouble ({e}). Check your connection, then resume."
@@ -1615,6 +1633,12 @@ def main():
         print("  2. Spotify")
         platform = 'spotify' if input("Enter choice (1-2, default 1): ").strip() == '2' else 'youtube'
     platform = platform or 'youtube'
+    source = 'youtube'
+    if platform == 'spotify':
+        print("\nPick songs using which data?")
+        print("  1. Spotify (default) - every pick is a real Spotify track, nothing lost to matching")
+        print("  2. YouTube Music     - uses YouTube view counts, then matches each song on Spotify")
+        source = 'youtube' if input("Enter choice (1-2, default 1): ").strip() == '2' else 'spotify'
     if platform == 'youtube' and not dry_run and not use_browser \
             and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
         print("Error: no client_secret*.json file found and no YouTube Music sign-in.")
@@ -1629,6 +1653,7 @@ def main():
 
     choice = show_menu()
     settings = get_mode_settings(choice)
+    settings['source'] = source
 
     if choice == '9':
         # --- Genre Cluster mode: one playlist job per genre ---
@@ -1641,6 +1666,7 @@ def main():
                 break
             print("Invalid choice.")
         track_settings = get_mode_settings(track_choice)
+        track_settings['source'] = source
 
         clusters = build_genre_clusters(bands)
 

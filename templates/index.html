@@ -59,8 +59,9 @@
             Click it to carry on from the same band with no duplicates. If a sign-in expired, reconnect first.</p>
 
           <h3>How does Spotify work here?</h3>
-          <p class="hint">Songs are picked using YouTube Music's data (that's what powers the modes),
-            then each one is looked up on Spotify by band and song title. A few songs may have no
+          <p class="hint">Choose <b>Save to → Spotify</b>. By default, songs are picked straight from
+            Spotify's own data (ranked by Spotify popularity). Alternatively, pick them with YouTube Music's
+            data (ranked by views); each one is then looked up on Spotify by band and song title. With that option, a few songs may have no
             Spotify match (e.g. YouTube-only live videos). The app skips those and tries the band's
             next song instead. Spotify requires a <b>Premium</b> account for this.</p>
 
@@ -273,6 +274,18 @@
             <option value="spotify">Spotify</option>
           </select>
           <p class="hint">Spotify needs a one-time setup (see API keys &amp; credentials).</p>
+        </div>
+        <div class="setting hidden" id="setting-source">
+          <label>Pick songs using</label>
+          <select id="opt-source">
+            <option value="spotify" selected>Spotify data (recommended for Spotify)</option>
+            <option value="youtube">YouTube Music data</option>
+          </select>
+          <p class="hint"><b>Spotify data</b>: every pick is a real Spotify track, ranked by Spotify
+            popularity, so nothing gets lost in matching. "Top Popular" and "Most Played Ever" give the same
+            result, because Spotify doesn't share play counts.
+            <b>YouTube Music data</b>: ranks by YouTube views, then looks each song up on Spotify. A few
+            may not match and get replaced by the next song.</p>
         </div>
         <div class="setting">
           <label>Privacy</label>

@@ -481,6 +481,8 @@ def _parse_settings(choice, data):
             settings['count'] = max(1, int(data.get('count', 3)))
         except (TypeError, ValueError):
             return None, 'Songs per artist must be a number.'
+    if data.get('platform') == 'spotify' and data.get('source', 'spotify') == 'spotify':
+        settings['source'] = 'spotify'
     return settings, None
 
 

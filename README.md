@@ -102,7 +102,10 @@ The headers are saved to `browser.json` (gitignored) and used automatically from
 - **One Hit Sampler** finishes long band lists in one day.
 
 ### Saving to Spotify
-Pick **Save to → Spotify** in the web UI, or run `python bot.py --spotify` (the CLI also asks at the start). Songs are still chosen by the normal modes, then matched on Spotify by band and title. Songs with no Spotify match are skipped and the band's next song is used instead.
+Pick **Save to → Spotify** in the web UI, or run `python bot.py --spotify` (the CLI also asks at the start). Then choose how songs are picked:
+
+- **Spotify data (default):** modes run on Spotify search, ranked by Spotify popularity. Every pick is a real Spotify track. Spotify has no play counts, so *Top Popular* and *Most Played Ever* give the same result; *Era Picker* uses Spotify's year filter.
+- **YouTube Music data:** modes run on YouTube Music as usual (view counts), then each song is matched on Spotify by band and title. Songs with no match are skipped and the band's next song is used instead.
 
 One-time setup (Spotify requires the developer app's owner to have **Premium**):
 1. Go to https://developer.spotify.com/dashboard → **Create app** (any name).

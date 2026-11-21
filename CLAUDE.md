@@ -74,7 +74,7 @@ Each mode is a distinct code path within `process_bands()`:
 - `bot.py` — CLI entry point and all playlist logic
 - `app.py` — Flask web UI (wraps `bot.py`; run with `python app.py`)
 - `templates/index.html`, `static/app.js`, `static/style.css` — web frontend
-- `spotify_sync.py` — Spotify output: PKCE sign-in (Client ID only, `spotify_token.json`), title cleanup + search matching, and `SpotifyWriter` (same writer interface; uses `/playlists/{id}/items`, the post-Feb-2026 API). Track titles come from `bot._track_titles`, filled by wrapping the `ytmusic` lookup methods. `state['platform']` (`youtube`/`spotify`) picks the writer on resume
+- `spotify_sync.py` — Spotify output: PKCE sign-in (Client ID only, `spotify_token.json`), title cleanup + search matching, and `SpotifyWriter` (same writer interface; uses `/playlists/{id}/items`, the post-Feb-2026 API). Track titles come from `bot._track_titles`, filled by wrapping the `ytmusic` lookup methods. `state['platform']` (`youtube`/`spotify`) picks the writer on resume. With `settings['source'] == 'spotify'`, `call_track_mode()` uses `spotify_sync.SPOTIFY_MODES` instead (search-only, returns `spotify:track:` URIs that `SpotifyWriter` adds without matching). `setlist_song_names()` is shared by both Setlist implementations
 - `poster_ocr.py` — Gemini vision wrapper for festival-poster band extraction
 - `bands.txt` — input: one artist name per line
 - `token.json` — OAuth token cache (not committed)

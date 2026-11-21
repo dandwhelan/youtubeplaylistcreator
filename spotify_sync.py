@@ -264,12 +264,19 @@ class SpotifyWriter:
 
     def add_video(self, playlist_id, video_id, band=None):
         from bot import AddFailed, track_title
+        if str(video_id).startswith('spotify:track:'):
+            uri = video_id  # picked with Spotify data: no matching needed
+            return self._add_uri(playlist_id, uri)
         title = track_title(video_id)
         if not title:
             raise AddFailed('could not read the track title')
         uri = self.find_track(title, band or '')
         if not uri:
             raise AddFailed(f'no Spotify match for "{clean_title(title, band)}"')
+        self._add_uri(playlist_id, uri)
+
+    def _add_uri(self, playlist_id, uri):
+        from bot import AddFailed
         seen = self._uris.setdefault(playlist_id, set())
         if uri in seen:
             raise AddFailed('same Spotify track already added')
@@ -279,3 +286,130 @@ class SpotifyWriter:
         if r.status_code not in (200, 201):
             raise AddFailed(f'Spotify refused the track: {r.text[:150]}')
         seen.add(uri)
+
+
+# --- Spotify-native track modes ---------------------------------------------
+# Used when "Pick songs using: Spotify" is chosen. Built only on /search (the
+# artist top-tracks/albums endpoints are gone for Development Mode apps since
+# February 2026). Search results come back roughly by popularity; when the
+# `popularity` field is present it is used to sort. Each function returns
+# Spotify track URIs, which SpotifyWriter adds directly (no matching step).
+
+def _remember(items):
+    from bot import _track_titles
+    for it in items:
+        _track_titles.setdefault(it['uri'], it.get('name', ''))
+
+
+def _search(q, type_='track', pages=3):
+    out = []
+    for page in range(pages):
+        r = _request('GET', '/search', params={'q': q, 'type': type_, 'limit': 10,
+                                                'offset': page * 10})
+        if r.status_code != 200:
+            break
+        items = (r.json().get(type_ + 's') or {}).get('items') or []
+        out.extend(i for i in items if i)
+        if len(items) < 10:
+            break
+    return out
+
+
+def artist_tracks(band, extra='', pages=3):
+    """The band's own tracks, most popular first, one version per song."""
+    want = _norm(band)
+    items = _search(f'artist:"{band}" {extra}'.strip(), pages=pages)
+    items = [i for i in items
+             if want in [_norm(a.get('name')) for a in i.get('artists', [])]]
+    if any('popularity' in i for i in items):
+        items.sort(key=lambda i: -(i.get('popularity') or 0))
+    seen, unique = set(), []
+    for i in items:
+        key = _norm(clean_title(i.get('name', ''), band))
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(i)
+    _remember(unique)
+    return unique
+
+
+def _year(item):
+    try:
+        return int((item.get('album') or {}).get('release_date', '')[:4])
+    except ValueError:
+        return 0
+
+
+def sp_top(band, count=3):
+    print(f"  Spotify: top tracks for {band}")
+    return [i['uri'] for i in artist_tracks(band)[:count]]
+
+
+def sp_one(band):
+    return sp_top(band, 1)
+
+
+def sp_deep(band, count=3):
+    print(f"  Spotify: deep cuts for {band}")
+    tracks = artist_tracks(band, pages=5)
+    for skip in (10, 5, 3):
+        deep = tracks[skip:skip + count]
+        if deep:
+            return [i['uri'] for i in deep]
+    return []
+
+
+def sp_latest(band, count=3):
+    print(f"  Spotify: latest releases for {band}")
+    tracks = artist_tracks(band, pages=5)
+    tracks.sort(key=lambda i: (i.get('album') or {}).get('release_date', ''), reverse=True)
+    return [i['uri'] for i in tracks[:count]]
+
+
+def sp_era(band, count=3, start_year=None, end_year=None):
+    print(f"  Spotify: {start_year}-{end_year} tracks for {band}")
+    extra = f'year:{start_year}-{end_year}' if start_year and end_year else ''
+    tracks = artist_tracks(band, extra, pages=3)
+    if start_year and end_year:
+        tracks = [i for i in tracks if start_year <= _year(i) <= end_year]
+    return [i['uri'] for i in tracks[:count]]
+
+
+def sp_best_of_albums(band, max_albums=5):
+    """Most popular track from each original studio album."""
+    from bot import is_original_album, get_album_base_name
+    print(f"  Spotify: best of albums for {band}")
+    picked, albums = [], set()
+    for i in artist_tracks(band, pages=5):
+        album = i.get('album') or {}
+        if album.get('album_type') != 'album' or not is_original_album(album.get('name', '')):
+            continue
+        base = get_album_base_name(album.get('name', ''))
+        if base in albums:
+            continue
+        albums.add(base)
+        picked.append(i['uri'])
+        if len(picked) >= max_albums:
+            break
+    return picked
+
+
+def sp_setlist(band, count=3):
+    from bot import setlist_song_names
+    names = setlist_song_names(band, count)
+    if not names:
+        return sp_top(band, count)
+    want, uris = _norm(band), []
+    for name in names:
+        for i in _search(f'track:"{name}" artist:"{band}"', pages=1):
+            if want in [_norm(a.get('name')) for a in i.get('artists', [])]:
+                _remember([i])
+                uris.append(i['uri'])
+                break
+    return uris or sp_top(band, count)
+
+
+SPOTIFY_MODES = {
+    '1': sp_top, '2': sp_top, '3': sp_best_of_albums, '4': sp_deep,
+    '5': sp_latest, '6': sp_one, '7': sp_era, '8': sp_setlist,
+}
