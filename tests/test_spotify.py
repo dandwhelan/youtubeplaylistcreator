@@ -156,3 +156,12 @@ def test_ytmusic_non_json_reply_is_auth_problem(monkeypatch):
         raise ValueError('Expecting value: line 1 column 1 (char 0)')
     with pytest.raises(bot.AuthExpired):
         w._call(boom)
+
+
+def test_403_premium_message_shows_only_relevant_fix():
+    from conftest import Resp
+    r = Resp(403, {'error': {'status': 403, 'message': 'Active premium subscription required '
+                                                     'for the owner of the app.'}})
+    msg = sp._explain_403(r)
+    assert 'premium subscription required' in msg and 'Premium' in msg
+    assert 'User Management' not in msg and 'Disconnect' not in msg

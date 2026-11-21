@@ -69,3 +69,9 @@ def test_browser_auth_explains_wrong_paste(client):
     assert 'address' in r.get_json()['error']
     r = client.post('/api/browser_auth', json={'headers': 'accept: */*\ncookie: a=b'})
     assert 'cut off' in r.get_json()['error']
+
+
+def test_job_reports_song_counts(client, fake_modes):
+    client.post('/api/run', json={'bands': ['A', 'B'], 'mode': '1', 'count': 3, 'dry_run': True})
+    job = wait_done(client)
+    assert job['songs_planned'] == 6
