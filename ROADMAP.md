@@ -6,8 +6,8 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 
 - [ ] **Mode 4 "Deep Cuts" is weak** — current logic slices index 5–7 of `artist['songs']['results']`, which only surfaces slightly-less-popular hits. Should pull full discography (album tracks), rank by view count, and skip the top N truly popular.
 - [ ] **Progress save is O(n²)** — `save_progress` writes the full `bands` list, full log, and entire `added_video_ids` after every band. Swap for an append-only log, or only write the diff.
-- [ ] **No tests** — add smoke tests for each mode using recorded API fixtures (VCR.py / responses).
-- [ ] **Quota visibility** — YouTube Data API v3 has per-day quotas; surface current usage and warn before exhaustion.
+- [x] **No tests** — offline pytest suite (resume, quota, writers, Spotify, web) + GitHub Actions. _(fixed; per-mode tests against recorded ytmusicapi fixtures still TODO)_
+- [x] **Quota visibility** — local quota tracker (`quota.json`), pre-run forecast, `--quota`, web badge. Plus quota-free writes via ytmusicapi browser auth. _(fixed)_
 - [x] **CLAUDE.md note about setlist.fm key is stale** — says hardcoded; it's actually env-var driven. _(fixed)_
 - [x] **Mode slot leak on duplicates** — if a candidate was already in the playlist, the slot was dropped silently; now we oversample and keep adding until the target count is hit. _(fixed)_
 
@@ -31,10 +31,11 @@ Tracked work for the YouTube Playlist Creator. Check off items as they land.
 - [ ] **Spotify import** — Spotify playlist URL → YouTube Music playlist.
 - [ ] **Last.fm scrobble import** — top artists over a user-specified window.
 - [ ] **Wikipedia discography parser** — for Mode 3 (Best of Albums), parse Wikipedia discography tables for a canonical studio-album list (more reliable than YTMusic's variant-laden list).
-- [ ] **Dry-run / preview mode** — print the tracklist that *would* be added, without calling the YouTube Data API (saves daily quota during testing).
+- [x] **Dry-run / preview mode** _(shipped: `--dry-run` / web checkbox)_ — print the tracklist that *would* be added, without calling the YouTube Data API (saves daily quota during testing).
 - [ ] **Config file (`config.yaml`)** — supply mode, counts, year range, playlist name via config for scripted re-runs.
 
 ### Output / Sharing
-- [ ] **Multi-platform export** — also create Spotify / Apple Music / Tidal playlists from the same run.
+- [x] **Spotify export** _(shipped: Save to → Spotify / `--spotify`)_
+- [ ] **Multi-platform export** — Apple Music / Tidal playlists from the same run.
 - [ ] **CSV export** of the final tracklist (artist, title, album, year, duration, video ID).
 - [ ] **Markdown report** with album art, track durations, and release years.

@@ -13,7 +13,10 @@
       <span class="pill" id="pill-auth" title="Click for setup steps">YouTube: checking…</span>
       <span class="pill" id="pill-setlist" title="Optional. Click for setup steps">setlist.fm</span>
       <span class="pill" id="pill-gemini" title="Optional. Click for setup steps">Gemini</span>
+ <span class="pill" id="pill-spotify" title="Optional. Click for setup steps">Spotify</span>
+      <span class="pill" id="pill-quota" title="Estimated YouTube Data API quota left today (resets midnight Pacific)">Quota</span>
       <button id="btn-connect" class="hidden">Connect YouTube</button>
+      <button id="btn-help" class="secondary">❓ Help</button>
     </div>
   </header>
 
@@ -24,15 +27,71 @@
   </div>
 
   <main>
+    <!-- Help -->
+    <section class="card">
+      <details id="help-details">
+        <summary>❓ How this works (start here if you're new)</summary>
+        <div class="help-body">
+          <h3>The 3 steps</h3>
+          <ol class="hint steps">
+            <li><b>Connect where the playlist goes</b>: YouTube Music, Spotify, or both. Setup steps are
+              in <b>API keys &amp; credentials</b> below. You only do this once.</li>
+            <li><b>Add your bands</b>: type them, upload a text file, or photograph a festival poster.</li>
+            <li><b>Pick a mode</b> (what kind of songs), choose <b>Save to</b>, and click <b>Create playlist</b>.</li>
+          </ol>
+
+          <h3>Which YouTube sign-in should I use?</h3>
+          <ul class="hint steps">
+            <li><b>YouTube Music sign-in (recommended)</b>: you copy some text from your browser once.
+              No daily limit and no Google account setup.</li>
+            <li><b>Google key file</b>: the official method, but Google only allows about
+              <b>199 songs per day</b>. Longer runs pause and continue the next day.</li>
+          </ul>
+
+          <h3>What is the "quota"?</h3>
+          <p class="hint">Google limits how many songs an app can add per day with the official method.
+            The <b>Quota</b> badge at the top shows roughly how many adds are left today. It resets at
+            midnight US Pacific time (8am UK). With the YouTube Music sign-in or Spotify, you can ignore it.</p>
+
+          <h3>What if it stops halfway?</h3>
+          <p class="hint">Progress is saved after <b>every song</b>. If the quota runs out, the internet drops,
+            a sign-in expires, or you close the app, a yellow <b>Resume</b> banner appears next time.
+            Click it to carry on from the same band with no duplicates. If a sign-in expired, reconnect first.</p>
+
+          <h3>How does Spotify work here?</h3>
+          <p class="hint">Choose <b>Save to → Spotify</b>. By default, songs are picked straight from
+            Spotify's own data (ranked by Spotify popularity). Alternatively, pick them with YouTube Music's
+            data (ranked by views); each one is then looked up on Spotify by band and song title. With that option, a few songs may have no
+            Spotify match (e.g. YouTube-only live videos). The app skips those and tries the band's
+            next song instead. Spotify requires a <b>Premium</b> account for this.</p>
+
+          <h3>Other terms</h3>
+          <ul class="hint steps">
+            <li><b>Dry run</b>: a preview. Shows which songs would be added without creating anything.
+              For Spotify, it also shows which songs Spotify has.</li>
+            <li><b>Both</b>: makes the same playlist on YouTube Music and Spotify in one go.</li>
+            <li><b>Privacy</b>: <i>Private</i> = only you; <i>Unlisted</i> = anyone with the link (YouTube
+              only; on Spotify it's the same as private); <i>Public</i> = shows on your profile.</li>
+            <li><b>Genre Cluster</b>: sorts your bands into Metal / Rock / Punk / Electronic / Pop and makes
+              one playlist per group.</li>
+            <li><b>Setlist Mode</b>: uses songs the band actually played live recently (needs a free setlist.fm key).</li>
+            <li><b>Festival poster</b>: reads band names from a poster picture using Google's Gemini AI
+              (needs a free Gemini key). Check the list it produces, because it can misread names.</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
     <!-- API keys & credentials -->
     <section class="card">
       <details id="keys-details">
         <summary>🔑 API keys &amp; credentials</summary>
         <div class="keys-body">
           <div class="key-block">
-            <label>Google OAuth client secret — <span id="cs-status">checking…</span></label>
-            <p class="hint">Required to create playlists. It is a free key file from Google that lets
-              this app add playlists to your own account. One-time setup, about 5 minutes. Sign in to
+            <label>Google key file (alternative YouTube sign-in) — <span id="cs-status">checking…</span></label>
+            <p class="hint"><b>Not needed if you use the YouTube Music sign-in below</b>, which is easier and has no
+              daily limit. This is Google's official method: a free key file that lets this app add playlists
+              to your own account, limited to about 199 songs per day. One-time setup, about 5 minutes. Sign in to
               Google with the account you use for YouTube Music, then:</p>
             <ol class="hint steps">
               <li><a href="https://console.cloud.google.com/projectcreate" target="_blank"
@@ -59,6 +118,62 @@
             <div class="row">
               <input type="file" id="cs-file" accept=".json,application/json">
               <button id="btn-cs-upload">Upload</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>YouTube Music sign-in — no daily quota (recommended) — <span id="ba-status">checking…</span></label>
+            <p class="hint">The Google key above is limited to about <b>199 track adds per day</b>.
+              Signing in with your browser's YouTube Music session instead writes playlists with
+              <b>no daily limit</b>. When set, it is used automatically.</p>
+            <ol class="hint steps">
+              <li>On a computer, open <a href="https://music.youtube.com" target="_blank" rel="noopener">music.youtube.com</a>
+                in <b>Chrome, Edge or Firefox</b> and make sure you're signed in (your picture is at top right).</li>
+              <li>Press <b>F12</b> (Mac: <b>Cmd+Option+I</b>). A panel of developer tools opens. That's normal.</li>
+              <li>In that panel, click the <b>Network</b> tab. In its small search/filter box, type <code>browse</code>.</li>
+              <li>On the YouTube Music page, click <b>Library</b> (left side). A line starting with
+                <b>browse</b> appears in the panel. If several do, any of them works.</li>
+              <li>Right-click that line → <b>Copy</b> → <b>Copy request headers</b>
+                (Firefox: <b>Copy Value</b> → <b>Copy Request Headers</b>).</li>
+              <li>Click in the box below, paste (<b>Ctrl+V</b> / <b>Cmd+V</b>), then click <b>Save sign-in</b>.
+                You can close the developer panel (F12 again).</li>
+            </ol>
+            <p class="hint">⚠️ This text works like a password for your YouTube account. It stays on this
+              computer in <code>browser.json</code>, so don't share it. It stops working if you sign out of
+              YouTube in that browser; just repeat these steps.</p>
+            <textarea id="ba-headers" rows="4" placeholder="paste request headers (must include cookie)…"></textarea>
+            <div class="row">
+              <button id="btn-ba-save">Save sign-in</button>
+              <button class="secondary" id="btn-ba-remove">Remove</button>
+              <span class="hint" id="ba-msg"></span>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>Spotify (optional, to save playlists to Spotify) — <span id="sp-status">checking…</span></label>
+            <p class="hint">Spotify needs a free "developer app" so this tool can create playlists on your
+              account. You need <b>Spotify Premium</b>, because Spotify blocks this for free accounts. One-time, about 3 minutes:</p>
+            <ol class="hint steps">
+              <li>Go to the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify
+                Developer Dashboard</a> and log in with your normal Spotify account. Accept the terms if asked.</li>
+              <li>Click <b>Create app</b>. Use any name and description (e.g. "Playlist Creator").</li>
+              <li>Under <b>Redirect URIs</b>, paste this and click <b>Add</b>:<br>
+                <code id="sp-redirect">http://127.0.0.1:5000/spotify/callback</code><br>
+                (also add <code>http://127.0.0.1:8888/callback</code> if you'll use the command-line version).
+                It must be <code>127.0.0.1</code>; Spotify rejects <code>localhost</code>.</li>
+              <li>Under "Which API/SDKs are you planning to use?", tick <b>Web API</b>. Agree and <b>Save</b>.</li>
+              <li>Open the app's <b>Settings</b>, copy the <b>Client ID</b> (you don't need the secret), paste it below
+                and click <b>Save keys</b>.</li>
+              <li>Click <b>Connect Spotify</b> and approve.</li>
+            </ol>
+            <div class="row">
+              <input type="password" id="key-spotify" placeholder="paste Client ID…" autocomplete="off">
+              <button class="secondary key-clear" data-key="SPOTIFY_CLIENT_ID">Clear</button>
+            </div>
+            <div class="row">
+              <button id="btn-sp-connect">Connect Spotify</button>
+              <button class="secondary" id="btn-sp-disconnect">Disconnect</button>
+              <span class="hint" id="sp-msg"></span>
             </div>
           </div>
 
@@ -107,7 +222,9 @@
       </div>
 
       <div class="tab-panel" id="panel-poster" hidden>
-        <p class="hint">Upload a poster image or paste its URL — Gemini extracts the lineup.</p>
+        <p class="hint">Upload a poster image or paste its web address (right-click the image online →
+          <b>Copy image address</b>). Gemini AI reads the band names into the list below. Check it for
+          misread names before continuing. Needs a free Gemini key (see API keys &amp; credentials).</p>
         <input type="file" id="poster-file" accept="image/*">
         <div class="row">
           <input type="url" id="poster-url" placeholder="https://…/poster.jpg">
@@ -116,6 +233,8 @@
         <p class="hint" id="poster-status"></p>
       </div>
 
+      <p class="hint">bands.txt is a plain text file next to the app with one band per line. Use
+        <b>Save to bands.txt</b> to keep a list for next time.</p>
       <label for="bands-text">Band list (one per line) — <span id="band-count">0</span> bands</label>
       <textarea id="bands-text" rows="10" spellcheck="false"
                 placeholder="Metallica&#10;Iron Maiden&#10;…"></textarea>
@@ -134,6 +253,7 @@
         <div class="setting hidden" id="setting-count">
           <label>Songs per artist</label>
           <input type="number" id="opt-count" value="3" min="1" max="20">
+          <p class="hint" id="count-hint">On the Google key method, each song uses 1 of ~199 daily adds.</p>
         </div>
         <div class="setting hidden" id="setting-albums">
           <label>Albums per artist</label>
@@ -150,12 +270,42 @@
           <select id="opt-trackmode"></select>
         </div>
         <div class="setting">
+          <label>Save to</label>
+          <select id="opt-platform">
+            <option value="youtube" selected>YouTube Music</option>
+            <option value="spotify">Spotify</option>
+            <option value="both">Both (one playlist on each)</option>
+          </select>
+          <p class="hint" id="platform-hint">Spotify needs a one-time setup (see API keys &amp; credentials).
+            <b>Both</b> picks songs with YouTube Music data and also adds each one to Spotify. Songs Spotify
+            doesn't have stay YouTube-only and are listed in the log.</p>
+        </div>
+        <div class="setting hidden" id="setting-source">
+          <label>Pick songs using</label>
+          <select id="opt-source">
+            <option value="spotify" selected>Spotify data (recommended for Spotify)</option>
+            <option value="youtube">YouTube Music data</option>
+          </select>
+          <p class="hint"><b>Spotify data</b>: every pick is a real Spotify track, ranked by Spotify
+            popularity, so nothing gets lost in matching. "Top Popular" and "Most Played Ever" give the same
+            result, because Spotify doesn't share play counts.
+            <b>YouTube Music data</b>: ranks by YouTube views, then looks each song up on Spotify. A few
+            may not match and get replaced by the next song.</p>
+        </div>
+        <div class="setting">
           <label>Privacy</label>
           <select id="opt-privacy">
             <option value="public">Public</option>
             <option value="unlisted">Unlisted</option>
             <option value="private" selected>Private</option>
           </select>
+          <p class="hint">Private = only you. Unlisted = anyone with the link (YouTube only).</p>
+        </div>
+        <div class="setting">
+          <label><input type="checkbox" id="opt-dryrun"> Dry run (preview only)</label>
+          <p class="hint">Lists the tracks that would be added. Writes nothing, uses no quota. When saving
+            to Spotify or Both, it also checks which songs Spotify has and lists any misses, so you can
+            spot problems before creating anything.</p>
         </div>
         <div class="setting" id="setting-name">
           <label>Playlist name</label>

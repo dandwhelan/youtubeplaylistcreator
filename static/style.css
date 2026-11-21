@@ -219,3 +219,7 @@ details > summary {
 .pill { cursor: pointer; }
 .steps { padding-left: 20px; }
 .steps li { margin: 5px 0; }
+
+.help-body h3 { font-size: 15px; margin: 14px 0 4px; }
+.help-body h3:first-child { margin-top: 4px; }
+.help-body ul.steps { padding-left: 20px; }

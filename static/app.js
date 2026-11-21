@@ -48,14 +48,18 @@ async function loadStatus() {
   const s = await api('/api/status');
 
   const authPill = $('pill-auth');
-  if (s.authenticated) {
+  if (s.browser_auth) {
+    authPill.textContent = 'YouTube Music: connected (no quota)';
+    authPill.className = 'pill ok';
+    $('btn-connect').classList.add('hidden');
+  } else if (s.authenticated) {
     authPill.textContent = 'YouTube: connected';
     authPill.className = 'pill ok';
     $('btn-connect').classList.add('hidden');
   } else {
     authPill.textContent = s.has_client_secret
       ? 'YouTube: not connected'
-      : 'YouTube: Google key file missing (click for steps)';
+      : 'YouTube: not set up (click for steps)';
     authPill.className = 'pill bad';
     $('btn-connect').classList.toggle('hidden', !s.has_client_secret);
   }
@@ -65,9 +69,26 @@ async function loadStatus() {
   $('pill-gemini').textContent = s.gemini_key ? 'Gemini ✓' : 'Gemini key not set (optional)';
   $('pill-gemini').className = 'pill ' + (s.gemini_key ? 'ok' : '');
 
+  const sp = $('pill-spotify');
+  sp.textContent = s.spotify_connected ? 'Spotify ✓'
+    : (s.spotify_client_id ? 'Spotify: not connected' : 'Spotify not set up (optional)');
+  sp.className = 'pill ' + (s.spotify_connected ? 'ok' : '');
+  $('sp-status').textContent = s.spotify_connected ? 'connected'
+    : (s.spotify_client_id ? 'Client ID saved, click Connect Spotify' : 'not set up');
+  $('sp-status').className = s.spotify_connected ? 'status-ok' : 'status-warn';
+
+  const qp = $('pill-quota');
+  if (s.browser_auth) {
+    qp.textContent = 'Quota: not needed';
+    qp.className = 'pill ok';
+  } else {
+    qp.textContent = `Quota today: ~${s.quota.adds_left} adds left`;
+    qp.className = 'pill ' + (s.quota.adds_left > 20 ? 'ok' : 'bad');
+  }
+
   if (s.progress && s.job_state !== 'running') {
     $('resume-text').textContent =
-      `Unfinished run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
+      `Unfinished ${({spotify: 'Spotify', both: 'YouTube + Spotify'})[s.progress.platform] || 'YouTube'} run found (${s.progress.mode}): playlist ${s.progress.playlist_index}/${s.progress.playlist_total}` +
       ` "${s.progress.playlist}", band ${s.progress.band_index}/${s.progress.total} done.`;
     $('resume-banner').classList.remove('hidden');
   } else {
@@ -129,6 +150,9 @@ async function loadKeys() {
     $('keys-details').open = true; // can't do anything without it — show the panel
   }
 
+  $('ba-status').textContent = data.browser_auth ? 'saved' : 'not set';
+  $('ba-status').className = data.browser_auth ? 'status-ok' : 'status-warn';
+
   const [setlistText, setlistClass] = keyStatusText(data.keys.SETLIST_FM_API_KEY);
   $('setlist-status').textContent = setlistText;
   $('setlist-status').className = setlistClass;
@@ -141,6 +165,7 @@ $('btn-save-keys').onclick = async () => {
   const body = {};
   if ($('key-setlist').value.trim()) body.SETLIST_FM_API_KEY = $('key-setlist').value.trim();
   if ($('key-gemini').value.trim()) body.GEMINI_API_KEY = $('key-gemini').value.trim();
+  if ($('key-spotify').value.trim()) body.SPOTIFY_CLIENT_ID = $('key-spotify').value.trim();
   if (!Object.keys(body).length) {
     $('keys-msg').textContent = 'Nothing to save — paste a key first.';
     return;
@@ -149,6 +174,7 @@ $('btn-save-keys').onclick = async () => {
     await postJSON('/api/keys', body);
     $('key-setlist').value = '';
     $('key-gemini').value = '';
+    $('key-spotify').value = '';
     $('keys-msg').textContent = 'Saved.';
     loadKeys();
     loadStatus();
@@ -170,6 +196,64 @@ document.querySelectorAll('.key-clear').forEach((btn) => {
     }
   };
 });
+
+$('btn-ba-save').onclick = async () => {
+  const headers = $('ba-headers').value.trim();
+  if (!headers) { $('ba-msg').textContent = 'Paste the request headers first.'; return; }
+  try {
+    await postJSON('/api/browser_auth', { headers });
+    $('ba-headers').value = '';
+    $('ba-msg').textContent = 'Saved — playlists will now skip the daily quota.';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    $('ba-msg').textContent = e.message;
+  }
+};
+
+$('btn-ba-remove').onclick = async () => {
+  if (!confirm('Remove the saved YouTube Music sign-in (browser.json)?')) return;
+  try {
+    await postJSON('/api/browser_auth', { headers: '' });
+    $('ba-msg').textContent = 'Removed.';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    $('ba-msg').textContent = e.message;
+  }
+};
+
+$('btn-sp-connect').onclick = async () => {
+  if ($('key-spotify').value.trim()) {
+    await postJSON('/api/keys', { SPOTIFY_CLIENT_ID: $('key-spotify').value.trim() });
+    $('key-spotify').value = '';
+  }
+  try {
+    const data = await postJSON('/api/spotify/start', {});
+    window.location.href = data.auth_url;
+  } catch (e) {
+    $('sp-msg').textContent = e.message;
+  }
+};
+
+$('btn-sp-disconnect').onclick = async () => {
+  if (!confirm('Disconnect Spotify from this app?')) return;
+  await postJSON('/api/spotify/disconnect', {});
+  $('sp-msg').textContent = 'Disconnected.';
+  loadStatus();
+};
+
+$('opt-platform').onchange = () => {
+  $('setting-source').classList.toggle('hidden', $('opt-platform').value !== 'spotify');
+};
+
+$('btn-help').onclick = () => {
+  $('help-details').open = true;
+  $('help-details').scrollIntoView({ behavior: 'smooth' });
+};
+
+// Show the exact redirect URI for the port this app is running on.
+$('sp-redirect').textContent = `http://127.0.0.1:${window.location.port || 80}/spotify/callback`;
 
 $('btn-cs-upload').onclick = async () => {
   const file = $('cs-file').files[0];
@@ -327,6 +411,9 @@ function collectSettings() {
     }
   }
   settings.privacy = $('opt-privacy').value;
+  settings.dry_run = $('opt-dryrun').checked;
+  settings.platform = $('opt-platform').value;
+  settings.source = $('opt-source').value;
   return settings;
 }
 
@@ -494,7 +581,11 @@ async function pollJob() {
     } else if (job.state === 'quota') {
       $('progress-text').textContent =
         "YouTube's daily quota is used up (about 199 tracks per day). Progress was saved — " +
-        'resume from the banner after it resets at midnight Pacific time.';
+        'resume from the banner after it resets at midnight Pacific time, or add a ' +
+        'YouTube Music sign-in under API keys & credentials to resume now with no quota.';
+    } else if (job.state === 'interrupted') {
+      $('progress-text').textContent =
+        `Paused: ${job.error} Progress was saved after every track — use Resume in the banner.`;
     } else if (job.state === 'cancelled') {
       $('progress-text').textContent =
         'Cancelled. Progress was saved — you can resume from the banner after reloading.';
@@ -514,7 +605,7 @@ loadKeys();
 
 // Status badges in the header open the setup panel, which has the steps
 // and links for each key.
-['pill-auth', 'pill-setlist', 'pill-gemini'].forEach((id) => {
+['pill-auth', 'pill-setlist', 'pill-gemini', 'pill-quota', 'pill-spotify'].forEach((id) => {
   $(id).onclick = () => {
     $('keys-details').open = true;
     $('keys-details').scrollIntoView({ behavior: 'smooth' });

@@ -23,6 +23,7 @@ from googleapiclient.discovery import build
 
 import bot
 import config
+import spotify_sync
 
 app = Flask(__name__)
 
@@ -98,12 +99,45 @@ def _load_credentials():
     return None
 
 
-def _get_youtube_or_error():
+_SPOTIFY_NOT_CONNECTED = ('Not connected to Spotify. Open "API keys & credentials", '
+                          'follow the Spotify steps, then click "Connect Spotify".')
+
+
+def _youtube_writer(data):
+    """YouTube writer: quota-free browser sign-in if saved, else Data API."""
+    if bot.has_browser_auth() and not data.get('force_data_api'):
+        try:
+            return bot.YTMusicWriter(), None
+        except Exception:
+            pass  # bad browser.json: fall through to the Data API
     creds = _load_credentials()
     if not creds:
         return None, (jsonify({'error': 'Not authenticated with YouTube. '
-                                         'Click "Connect YouTube" first.'}), 401)
-    return build('youtube', 'v3', credentials=creds), None
+                                         'Click "Connect YouTube" first, or save a '
+                                         'YouTube Music sign-in.'}), 401)
+    return bot.DataApiWriter(build('youtube', 'v3', credentials=creds)), None
+
+
+def _get_youtube_or_error(platform=None, source=None):
+    """Return a playlist writer for the request's platform
+    ('youtube', 'spotify' or 'both'), or a dry-run writer."""
+    data = request.get_json(silent=True) or {}
+    platform = platform or data.get('platform', 'youtube')
+    source = source or data.get('source', 'spotify')
+    if platform in ('spotify', 'both') and not spotify_sync.is_connected():
+        return None, (jsonify({'error': _SPOTIFY_NOT_CONNECTED}), 401)
+    if data.get('dry_run'):
+        match = platform == 'both' or (platform == 'spotify' and source != 'spotify')
+        return bot.DryRunWriter(match_spotify=match,
+                                require_match=platform == 'spotify'), None
+    if platform == 'spotify':
+        return spotify_sync.SpotifyWriter(), None
+    yt, err = _youtube_writer(data)
+    if err:
+        return None, err
+    if platform == 'both':
+        return bot.MultiWriter([spotify_sync.SpotifyWriter(), yt]), None
+    return yt, None
 
 
 @app.route('/api/auth/start', methods=['POST'])
@@ -139,6 +173,48 @@ def oauth2callback():
 
 
 # ---------------------------------------------------------------------------
+# Spotify auth (PKCE; redirect must be a 127.0.0.1 loopback URL)
+# ---------------------------------------------------------------------------
+
+_spotify_pending = None
+
+
+@app.route('/api/spotify/start', methods=['POST'])
+def spotify_start():
+    global _spotify_pending
+    port = request.host.rsplit(':', 1)[-1] if ':' in request.host else '5000'
+    try:
+        url, _spotify_pending = spotify_sync.begin_auth(spotify_sync.web_redirect(port))
+    except spotify_sync.SpotifyAuthError as e:
+        return jsonify({'error': f'{e} Paste your Spotify Client ID in "API keys & '
+                                 'credentials" first.'}), 400
+    return jsonify({'auth_url': url})
+
+
+@app.route('/spotify/callback')
+def spotify_callback():
+    global _spotify_pending
+    if request.args.get('error'):
+        return f"Spotify sign-in was cancelled or refused: {request.args['error']}", 400
+    if _spotify_pending is None:
+        return 'No Spotify sign-in in progress. Go back to the app and click "Connect Spotify".', 400
+    try:
+        spotify_sync.finish_auth(_spotify_pending, request.args.get('code'),
+                                 request.args.get('state'))
+    except spotify_sync.SpotifyAuthError as e:
+        return str(e), 400
+    _spotify_pending = None
+    return redirect('/')
+
+
+@app.route('/api/spotify/disconnect', methods=['POST'])
+def spotify_disconnect():
+    if os.path.exists(spotify_sync.TOKEN_FILE):
+        os.remove(spotify_sync.TOKEN_FILE)
+    return jsonify({'disconnected': True})
+
+
+# ---------------------------------------------------------------------------
 # API keys & credentials
 # ---------------------------------------------------------------------------
 
@@ -157,6 +233,7 @@ def get_keys():
             'present': has_secret,
             'file': bot.YOUTUBE_CLIENT_SECRETS_FILE if has_secret else None,
         },
+        'browser_auth': bot.has_browser_auth(),
     })
 
 
@@ -171,6 +248,27 @@ def save_keys():
     if not changed:
         return jsonify({'error': 'No keys given.'}), 400
     return jsonify({'saved': changed})
+
+
+@app.route('/api/browser_auth', methods=['POST'])
+def browser_auth():
+    """Save YouTube Music request headers as browser.json (quota-free writes)."""
+    data = request.get_json(silent=True) or {}
+    headers_raw = (data.get('headers') or '').strip()
+    if not headers_raw:
+        if os.path.exists(bot.BROWSER_AUTH_FILE):
+            os.remove(bot.BROWSER_AUTH_FILE)
+            return jsonify({'removed': True})
+        return jsonify({'error': 'Paste the request headers first.'}), 400
+    if 'cookie' not in headers_raw.lower():
+        return jsonify({'error': 'No cookie header found. Copy the headers of a '
+                                 'POST /browse request from a signed-in '
+                                 'music.youtube.com tab.'}), 400
+    try:
+        bot.setup_browser_auth(headers_raw)
+    except Exception as e:
+        return jsonify({'error': f'Could not use those headers: {e}'}), 400
+    return jsonify({'saved': bot.BROWSER_AUTH_FILE})
 
 
 @app.route('/api/client_secret', methods=['POST'])
@@ -222,9 +320,14 @@ def status():
             'playlist': current['name'],
             'playlist_index': progress['job_index'] + 1,
             'playlist_total': len(progress['jobs']),
+            'platform': progress.get('platform', 'youtube'),
         }
     return jsonify({
-        'authenticated': _load_credentials() is not None,
+        'authenticated': _load_credentials() is not None or bot.has_browser_auth(),
+        'browser_auth': bot.has_browser_auth(),
+        'spotify_connected': spotify_sync.is_connected(),
+        'spotify_client_id': bool(spotify_sync.client_id()),
+        'quota': bot.quota_status(),
         'has_client_secret': os.path.exists(bot.YOUTUBE_CLIENT_SECRETS_FILE),
         'setlist_key': bool(config.get_key('SETLIST_FM_API_KEY')),
         'gemini_key': bool(config.get_key('GEMINI_API_KEY')),
@@ -315,10 +418,14 @@ def _run_state(job, youtube, state):
         job['current'] = done
         job['total'] = total
         job['band'] = band
+        label = {'youtube': 'YouTube Music', 'spotify': 'Spotify'}
         job['playlists'] = [
-            {'name': j['name'],
-             'url': f"https://music.youtube.com/playlist?list={j['playlist_id']}"}
-            for j in state['jobs'] if j.get('playlist_id')]
+            {'name': j['name'] + (f" ({label.get(plat, plat)})"
+                                  if youtube.platform == 'both' else ''),
+             'url': url}
+            for j in state['jobs']
+            if j.get('playlist_id') and not str(j['playlist_id']).startswith('DRYRUN')
+            for plat, url in bot.playlist_links(youtube, j['playlist_id'])]
         job['dupes'] = state.get('dupes', 0)
         return not job['cancel']
 
@@ -328,14 +435,20 @@ def _run_state(job, youtube, state):
         result = bot.run_jobs(youtube, state, progress_callback=callback)
         callback(job['current'], job['total'], job['band'])
         job['warnings'] = list(bot.match_warnings)
-        _finish_job(job, {'done': 'done', 'quota': 'quota',
-                          'stopped': 'cancelled'}[result])
+        _finish_job(job, {'done': 'done', 'quota': 'quota', 'stopped': 'cancelled',
+                          'auth': 'interrupted', 'network': 'interrupted',
+                          'error': 'interrupted'}[result],
+                    state.get('last_stop') if result in ('auth', 'network', 'error')
+                    else None)
     except Exception as e:
         _finish_job(job, 'error', e)
 
 
 def _new_state(choice, settings, privacy, jobs):
+    data = request.get_json(silent=True) or {}
     return {
+        'platform': data.get('platform') if data.get('platform') in ('spotify', 'both')
+        else 'youtube',
         'choice': choice,
         'settings': settings,
         'privacy': privacy,
@@ -387,6 +500,8 @@ def _parse_settings(choice, data):
             settings['count'] = max(1, int(data.get('count', 3)))
         except (TypeError, ValueError):
             return None, 'Songs per artist must be a number.'
+    if data.get('platform') == 'spotify' and data.get('source', 'spotify') == 'spotify':
+        settings['source'] = 'spotify'
     return settings, None
 
 
@@ -499,7 +614,9 @@ def resume():
     if not progress or progress['job_index'] >= len(progress['jobs']):
         return jsonify({'error': 'No saved progress found.'}), 404
 
-    youtube, auth_err = _get_youtube_or_error()
+    youtube, auth_err = _get_youtube_or_error(
+        progress.get('platform', 'youtube'),
+        progress.get('settings', {}).get('source', 'youtube'))
     if auth_err:
         return auth_err
 
