@@ -60,3 +60,12 @@ def test_settings_source_only_for_spotify():
     assert webapp._parse_settings('1', {'platform': 'spotify', 'count': 2}) == \
         ({'count': 2, 'source': 'spotify'}, None)
     assert webapp._parse_settings('1', {'platform': 'both', 'count': 2}) == ({'count': 2}, None)
+
+
+def test_browser_auth_explains_wrong_paste(client):
+    r = client.post('/api/browser_auth', json={'headers': '{"responseContext": {}}'})
+    assert 'response' in r.get_json()['error']
+    r = client.post('/api/browser_auth', json={'headers': 'https://music.youtube.com/youtubei/v1/browse?x=1'})
+    assert 'address' in r.get_json()['error']
+    r = client.post('/api/browser_auth', json={'headers': 'accept: */*\ncookie: a=b'})
+    assert 'cut off' in r.get_json()['error']

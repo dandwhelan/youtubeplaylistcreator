@@ -134,12 +134,18 @@
               <li>On the YouTube Music page, click <b>Library</b> (left side). A line starting with
                 <b>browse</b> appears in the panel. If several do, any of them works.</li>
               <li>Right-click that line → <b>Copy</b> → <b>Copy request headers</b>
-                (Firefox: <b>Copy Value</b> → <b>Copy Request Headers</b>).</li>
+                (Firefox: <b>Copy Value</b> → <b>Copy Request Headers</b>).
+                No such option? Click the line, open the <b>Headers</b> tab (not Response or Preview),
+                scroll to the <b>Request Headers</b> section and copy all of it. It must include a
+                line starting with <code>cookie</code>. The address (Request URL) and the music data
+                (Response) are the wrong parts.</li>
               <li>Click in the box below, paste (<b>Ctrl+V</b> / <b>Cmd+V</b>), then click <b>Save sign-in</b>.
                 You can close the developer panel (F12 again).</li>
             </ol>
-            <p class="hint">⚠️ This text works like a password for your YouTube account. It stays on this
-              computer in <code>browser.json</code>, so don't share it. It stops working if you sign out of
+            <p class="hint">⚠️ This text works like a password for your YouTube account. Paste it
+              <b>only into this box</b>, never into chats, emails or support forums. It stays on this
+              computer in <code>browser.json</code>. If you ever share it by accident, sign out of YouTube
+              in that browser to cancel it, then sign in and copy it again. It stops working if you sign out of
               YouTube in that browser; just repeat these steps.</p>
             <textarea id="ba-headers" rows="4" placeholder="paste request headers (must include cookie)…"></textarea>
             <div class="row">

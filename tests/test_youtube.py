@@ -121,3 +121,42 @@ def test_track_titles_noted_from_ytmusic_results():
     bot._note_titles({'tracks': [{'videoId': 'v1', 'title': 'Song'}],
                       'other': {'results': [{'videoId': 'v2', 'title': 'Two'}]}})
     assert bot._track_titles == {'v1': 'Song', 'v2': 'Two'}
+
+
+CHROME_SPLIT = """:authority
+music.youtube.com
+:method
+POST
+:path
+/youtubei/v1/browse?ctoken=abc%3D&type=next
+:scheme
+https
+accept
+*/*
+authorization
+SAPISIDHASH 1_fake
+cookie
+SAPISID=fake; __Secure-3PAPISID=fake
+x-goog-authuser
+0
+"""
+
+
+def test_normalize_chrome_split_headers():
+    out = bot.normalize_headers(CHROME_SPLIT)
+    assert out.splitlines() == ['accept: */*', 'authorization: SAPISIDHASH 1_fake',
+                                'cookie: SAPISID=fake; __Secure-3PAPISID=fake',
+                                'x-goog-authuser: 0']
+
+
+def test_normalize_raw_headers_drops_pseudo_headers():
+    raw = ":authority: music.youtube.com\naccept: */*\ncookie: a=b\nx-goog-authuser: 0"
+    assert bot.normalize_headers(raw) == "accept: */*\ncookie: a=b\nx-goog-authuser: 0"
+
+
+def test_setup_browser_auth_accepts_chrome_split_format(tmp_path):
+    import json
+    bot.setup_browser_auth(CHROME_SPLIT)
+    saved = json.loads((tmp_path / 'browser.json').read_text())
+    assert 'cookie' in {k.lower() for k in saved}
+    assert not any('youtubei' in k or k.startswith(':') for k in saved)

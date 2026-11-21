@@ -260,6 +260,13 @@ def browser_auth():
             os.remove(bot.BROWSER_AUTH_FILE)
             return jsonify({'removed': True})
         return jsonify({'error': 'Paste the request headers first.'}), 400
+    if headers_raw.lstrip().startswith('{'):
+        return jsonify({'error': 'That is the response (the music data), not the request '
+                                 'headers. In DevTools click the Headers tab, or right-click '
+                                 'the request > Copy > Copy request headers.'}), 400
+    if headers_raw.lstrip().lower().startswith('http') and '\n' not in headers_raw.strip():
+        return jsonify({'error': 'That is only the request address. Right-click the request '
+                                 '> Copy > Copy request headers instead.'}), 400
     if 'cookie' not in headers_raw.lower():
         return jsonify({'error': 'No cookie header found. Copy the headers of a '
                                  'POST /browse request from a signed-in '
@@ -267,7 +274,11 @@ def browser_auth():
     try:
         bot.setup_browser_auth(headers_raw)
     except Exception as e:
-        return jsonify({'error': f'Could not use those headers: {e}'}), 400
+        hint = ''
+        if 'x-goog-authuser' in str(e):
+            hint = (' The copy may have been cut off: make sure you copied the whole '
+                    'Request Headers section, right to the end.')
+        return jsonify({'error': f'Could not use those headers: {e}{hint}'}), 400
     return jsonify({'saved': bot.BROWSER_AUTH_FILE})
 
 
