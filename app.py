@@ -267,7 +267,7 @@ def browser_auth():
     if headers_raw.lstrip().lower().startswith('http') and '\n' not in headers_raw.strip():
         return jsonify({'error': 'That is only the request address. Right-click the request '
                                  '> Copy > Copy request headers instead.'}), 400
-    if 'cookie' not in headers_raw.lower():
+    if 'cookie' not in headers_raw.lower() and not headers_raw.lstrip().lower().startswith('curl'):
         return jsonify({'error': 'No cookie header found. Copy the headers of a '
                                  'POST /browse request from a signed-in '
                                  'music.youtube.com tab.'}), 400
@@ -276,8 +276,8 @@ def browser_auth():
     except Exception as e:
         hint = ''
         if 'x-goog-authuser' in str(e):
-            hint = (' The copy may have been cut off: make sure you copied the whole '
-                    'Request Headers section, right to the end.')
+            hint = (' The copy was probably cut off (Edge and Chrome shorten long values). '
+                    'Right-click the request > Copy > Copy as cURL instead.')
         return jsonify({'error': f'Could not use those headers: {e}{hint}'}), 400
     return jsonify({'saved': bot.BROWSER_AUTH_FILE})
 
