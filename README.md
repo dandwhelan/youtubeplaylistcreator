@@ -85,8 +85,21 @@ Then open **http://localhost:5000**. The web UI gives you:
 - **Visibility prompt** - choose private (default), unlisted or public for each run
 - **Artist match check** - a band with no exact name match on YouTube Music is still added, but listed at the end of `playlist_log.txt` so you can check it by hand
 
-### Daily quota: about 199 tracks per day
-A default Google Cloud project gets 10,000 YouTube Data API units per day and each track added costs 50. That is about 199 tracks a day (100 bands at 3 songs each is 300). When the quota runs out the script stops, keeps its progress, and tells you to run it again after the quota resets (midnight Pacific time). Use **One Hit Sampler** if you want a long band list finished in one day.
+### Daily quota: about 199 tracks per day (and how to skip it)
+A default Google Cloud project gets 10,000 YouTube Data API units per day and each track added costs 50. That is about 199 tracks a day (100 bands at 3 songs each is 300). Searching for songs uses YouTube Music directly and costs nothing; only *adding* tracks counts.
+
+**Skip the quota entirely (recommended for big lineups):** sign in with your browser's YouTube Music session. Playlists are then written through YouTube Music's own web API, which has no daily cap, and no Google Cloud key is needed at all.
+
+- CLI: `python bot.py --setup-browser`, then follow the prompt (copy the request headers of a `POST /browse` request from a signed-in music.youtube.com tab via DevTools → Network).
+- Web UI: paste the same headers into **API keys & credentials → YouTube Music sign-in**.
+
+The headers are saved to `browser.json` (gitignored) and used automatically from then on. Use `--data-api` to force the old path.
+
+**If you stay on the Data API:**
+- Every run prints how many adds it needs versus the estimated quota left today (`python bot.py --quota` shows it on its own; the web UI shows it as a badge). If your project has a raised limit, set `YOUTUBE_DAILY_QUOTA`.
+- When the quota runs out the script stops, keeps its progress, and resumes the next day (reset is midnight Pacific).
+- `python bot.py --dry-run` (or the **Dry run** checkbox) previews the tracklist without writing anything or using quota.
+- **One Hit Sampler** finishes long band lists in one day.
 
 ### Coming back after a while
 - Update the YouTube Music library first, as old versions break: `pip install -U ytmusicapi`

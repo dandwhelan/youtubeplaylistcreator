@@ -48,7 +48,11 @@ async function loadStatus() {
   const s = await api('/api/status');
 
   const authPill = $('pill-auth');
-  if (s.authenticated) {
+  if (s.browser_auth) {
+    authPill.textContent = 'YouTube Music: connected (no quota)';
+    authPill.className = 'pill ok';
+    $('btn-connect').classList.add('hidden');
+  } else if (s.authenticated) {
     authPill.textContent = 'YouTube: connected';
     authPill.className = 'pill ok';
     $('btn-connect').classList.add('hidden');
@@ -64,6 +68,15 @@ async function loadStatus() {
   $('pill-setlist').className = 'pill ' + (s.setlist_key ? 'ok' : '');
   $('pill-gemini').textContent = s.gemini_key ? 'Gemini ✓' : 'Gemini key not set (optional)';
   $('pill-gemini').className = 'pill ' + (s.gemini_key ? 'ok' : '');
+
+  const qp = $('pill-quota');
+  if (s.browser_auth) {
+    qp.textContent = 'Quota: not needed';
+    qp.className = 'pill ok';
+  } else {
+    qp.textContent = `Quota today: ~${s.quota.adds_left} adds left`;
+    qp.className = 'pill ' + (s.quota.adds_left > 20 ? 'ok' : 'bad');
+  }
 
   if (s.progress && s.job_state !== 'running') {
     $('resume-text').textContent =
@@ -129,6 +142,9 @@ async function loadKeys() {
     $('keys-details').open = true; // can't do anything without it — show the panel
   }
 
+  $('ba-status').textContent = data.browser_auth ? 'saved' : 'not set';
+  $('ba-status').className = data.browser_auth ? 'status-ok' : 'status-warn';
+
   const [setlistText, setlistClass] = keyStatusText(data.keys.SETLIST_FM_API_KEY);
   $('setlist-status').textContent = setlistText;
   $('setlist-status').className = setlistClass;
@@ -170,6 +186,32 @@ document.querySelectorAll('.key-clear').forEach((btn) => {
     }
   };
 });
+
+$('btn-ba-save').onclick = async () => {
+  const headers = $('ba-headers').value.trim();
+  if (!headers) { $('ba-msg').textContent = 'Paste the request headers first.'; return; }
+  try {
+    await postJSON('/api/browser_auth', { headers });
+    $('ba-headers').value = '';
+    $('ba-msg').textContent = 'Saved — playlists will now skip the daily quota.';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    $('ba-msg').textContent = e.message;
+  }
+};
+
+$('btn-ba-remove').onclick = async () => {
+  if (!confirm('Remove the saved YouTube Music sign-in (browser.json)?')) return;
+  try {
+    await postJSON('/api/browser_auth', { headers: '' });
+    $('ba-msg').textContent = 'Removed.';
+    loadKeys();
+    loadStatus();
+  } catch (e) {
+    $('ba-msg').textContent = e.message;
+  }
+};
 
 $('btn-cs-upload').onclick = async () => {
   const file = $('cs-file').files[0];
@@ -327,6 +369,7 @@ function collectSettings() {
     }
   }
   settings.privacy = $('opt-privacy').value;
+  settings.dry_run = $('opt-dryrun').checked;
   return settings;
 }
 
@@ -494,7 +537,8 @@ async function pollJob() {
     } else if (job.state === 'quota') {
       $('progress-text').textContent =
         "YouTube's daily quota is used up (about 199 tracks per day). Progress was saved — " +
-        'resume from the banner after it resets at midnight Pacific time.';
+        'resume from the banner after it resets at midnight Pacific time, or add a ' +
+        'YouTube Music sign-in under API keys & credentials to resume now with no quota.';
     } else if (job.state === 'cancelled') {
       $('progress-text').textContent =
         'Cancelled. Progress was saved — you can resume from the banner after reloading.';
@@ -514,7 +558,7 @@ loadKeys();
 
 // Status badges in the header open the setup panel, which has the steps
 // and links for each key.
-['pill-auth', 'pill-setlist', 'pill-gemini'].forEach((id) => {
+['pill-auth', 'pill-setlist', 'pill-gemini', 'pill-quota'].forEach((id) => {
   $(id).onclick = () => {
     $('keys-details').open = true;
     $('keys-details').scrollIntoView({ behavior: 'smooth' });

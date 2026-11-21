@@ -34,7 +34,7 @@ The entire application lives in `bot.py` (monolithic, ~32KB). The flow is:
 2. **Input** — user picks a mode (1–9) and settings; band list loaded from `bands.txt`
 3. **Search** — `get_artist()` + `ytmusicapi` find tracks per band
 4. **Dedup** — global `added_video_ids` set prevents duplicate songs across the playlist
-5. **Add to playlist** — YouTube Data API v3 inserts video IDs
+5. **Add to playlist** — a *writer* inserts video IDs: `YTMusicWriter` (ytmusicapi browser auth from `browser.json`, no quota, preferred when present), `DataApiWriter` (YouTube Data API v3, 50 units/insert, tracked in `quota.json`), or `DryRunWriter` (`--dry-run`, writes nothing and never touches `progress.json`). `run_jobs()`/`process_bands()` accept a writer or a raw Data API service (wrapped via `as_writer()`)
 6. **Resume** — `save_progress()` / `load_progress()` persist state to `progress.json` so a crashed run can be resumed
 
 ### The 9 Modes
@@ -77,6 +77,8 @@ Each mode is a distinct code path within `process_bands()`:
 - `poster_ocr.py` — Gemini vision wrapper for festival-poster band extraction
 - `bands.txt` — input: one artist name per line
 - `token.json` — OAuth token cache (not committed)
+- `browser.json` — ytmusicapi browser headers for quota-free writes (not committed; `python bot.py --setup-browser` or `/api/browser_auth`)
+- `quota.json` — local estimate of Data API units used today, Pacific date (not committed)
 - `progress.json` — resume state (not committed)
 - `playlist_log.txt` — run log
 

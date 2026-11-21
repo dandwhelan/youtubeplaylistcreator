@@ -3,8 +3,10 @@ import re
 import glob
 import json
 import time
+import sys
 import requests
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from ytmusicapi import YTMusic
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -30,6 +32,20 @@ LOG_FILE = 'playlist_log.txt'
 TOKEN_FILE = 'token.json'
 PROGRESS_FILE = 'progress.json'
 PLAYLIST_PRIVACY = 'private'  # default offered at the visibility prompt
+
+# Optional ytmusicapi browser sign-in. When this file exists, playlists are
+# written through YouTube Music's own web API instead of the YouTube Data API,
+# which uses NO Data API quota (no ~199 adds/day cap). Create it with
+# `python bot.py --setup-browser` or the web UI's credentials panel.
+BROWSER_AUTH_FILE = 'browser.json'
+
+# YouTube Data API quota bookkeeping (local estimate; Google's console is the
+# source of truth). Default projects get 10,000 units/day; every playlist
+# create or track insert costs 50. Override the limit with
+# YOUTUBE_DAILY_QUOTA if Google granted your project more.
+QUOTA_FILE = 'quota.json'
+DEFAULT_DAILY_QUOTA = 10000
+INSERT_COST = 50
 
 # Setlist Mode needs a free key from https://api.setlist.fm — set the
 # SETLIST_FM_API_KEY env var, or save it via the web UI's "API keys" panel
@@ -150,27 +166,226 @@ def _execute(request):
         raise
 
 
+# --- Quota tracking ---------------------------------------------------------
+
+def _pacific_today():
+    """Data API quota resets at midnight Pacific time."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo('America/Los_Angeles')).date().isoformat()
+    except Exception:  # no tz database (e.g. Windows without tzdata)
+        return (datetime.now(timezone.utc) - timedelta(hours=8)).date().isoformat()
+
+
+def daily_quota_limit():
+    try:
+        return int(get_key('YOUTUBE_DAILY_QUOTA') or DEFAULT_DAILY_QUOTA)
+    except ValueError:
+        return DEFAULT_DAILY_QUOTA
+
+
+def _load_quota():
+    today = _pacific_today()
+    try:
+        with open(QUOTA_FILE, 'r') as f:
+            data = json.load(f)
+        if data.get('date') == today:
+            return data
+    except (OSError, ValueError):
+        pass
+    return {'date': today, 'used': 0}
+
+
+def _record_quota(units=None, exhausted=False):
+    data = _load_quota()
+    if exhausted:
+        data['used'] = max(data['used'], daily_quota_limit())
+    else:
+        data['used'] += units
+    try:
+        with open(QUOTA_FILE, 'w') as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+def quota_status():
+    """Estimated Data API units used/remaining today (this app only)."""
+    data = _load_quota()
+    limit = daily_quota_limit()
+    remaining = max(0, limit - data['used'])
+    return {'date': data['date'], 'used': data['used'], 'limit': limit,
+            'remaining': remaining, 'adds_left': remaining // INSERT_COST}
+
+
+# --- Playlist writers ---------------------------------------------------------
+
+class AddFailed(Exception):
+    """One track could not be added (unavailable video, etc.)."""
+
+
+class DataApiWriter:
+    """Writes through the official YouTube Data API v3 (50 quota units per
+    call, ~199 adds/day on a default project)."""
+    name = 'YouTube Data API'
+    uses_quota = True
+    dry_run = False
+
+    def __init__(self, youtube):
+        self.youtube = youtube
+
+    def _execute(self, request):
+        try:
+            result = _execute(request)
+        except QuotaExceeded:
+            _record_quota(exhausted=True)
+            raise
+        except HttpError:
+            _record_quota(INSERT_COST)  # failed calls still cost quota
+            raise
+        _record_quota(INSERT_COST)
+        return result
+
+    def create_playlist(self, name, description, privacy):
+        return self._execute(self.youtube.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {"title": name, "description": description},
+                "status": {"privacyStatus": privacy}
+            }
+        ))['id']
+
+    def add_video(self, playlist_id, video_id):
+        try:
+            self._execute(self.youtube.playlistItems().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id}
+                    }
+                }
+            ))
+        except HttpError as e:
+            raise AddFailed(_http_error_reason(e) or str(e)) from e
+
+
+class YTMusicWriter:
+    """Writes through YouTube Music's web API via ytmusicapi browser auth.
+    Uses no Data API quota."""
+    name = 'YouTube Music (no quota)'
+    uses_quota = False
+    dry_run = False
+
+    def __init__(self, auth_file=BROWSER_AUTH_FILE):
+        self.yt = YTMusic(auth_file)
+
+    def create_playlist(self, name, description, privacy):
+        result = self.yt.create_playlist(name, description,
+                                         privacy_status=privacy.upper())
+        if not isinstance(result, str):
+            raise RuntimeError(f"YouTube Music refused to create the playlist: {result}")
+        return result
+
+    def add_video(self, playlist_id, video_id):
+        try:
+            result = self.yt.add_playlist_items(playlist_id, [video_id], duplicates=True)
+        except Exception as e:
+            raise AddFailed(str(e)) from e
+        if not (isinstance(result, dict) and 'SUCCEEDED' in str(result.get('status', ''))):
+            raise AddFailed(str(result)[:200])
+
+
+class DryRunWriter:
+    """Pretends to write: prints what would be added. Costs nothing and
+    never touches progress.json."""
+    name = 'Dry run (nothing is written)'
+    uses_quota = False
+    dry_run = True
+
+    def __init__(self):
+        self.tracks = []
+
+    def create_playlist(self, name, description, privacy):
+        return f"DRYRUN-{len(self.tracks)}"
+
+    def add_video(self, playlist_id, video_id):
+        self.tracks.append(video_id)
+        print(f"    would add https://music.youtube.com/watch?v={video_id}")
+
+
+def as_writer(obj):
+    """Accept a writer or a raw googleapiclient service (older callers)."""
+    return obj if hasattr(obj, 'add_video') else DataApiWriter(obj)
+
+
+def has_browser_auth():
+    return os.path.exists(BROWSER_AUTH_FILE)
+
+
+def get_playlist_writer():
+    """Prefer the quota-free YouTube Music writer when browser auth exists."""
+    if has_browser_auth():
+        try:
+            return YTMusicWriter()
+        except Exception as e:
+            print(f"Could not use {BROWSER_AUTH_FILE} ({e}); falling back to the "
+                  "YouTube Data API.")
+    return DataApiWriter(get_youtube_service())
+
+
+def setup_browser_auth(headers_raw=None):
+    """Create browser.json from request headers copied out of a signed-in
+    music.youtube.com tab (DevTools > Network > a POST to /browse >
+    Copy request headers). With no argument, prompts in the terminal."""
+    import ytmusicapi
+    ytmusicapi.setup(filepath=BROWSER_AUTH_FILE, headers_raw=headers_raw)
+    return BROWSER_AUTH_FILE
+
+
 def create_playlist(youtube, name, description, privacy=PLAYLIST_PRIVACY):
-    request = youtube.playlists().insert(
-        part="snippet,status",
-        body={
-            "snippet": {"title": name, "description": description},
-            "status": {"privacyStatus": privacy}
-        }
-    )
-    return _execute(request)['id']
+    return as_writer(youtube).create_playlist(name, description, privacy)
 
 
 def add_video_to_playlist(youtube, playlist_id, video_id):
-    _execute(youtube.playlistItems().insert(
-        part="snippet",
-        body={
-            "snippet": {
-                "playlistId": playlist_id,
-                "resourceId": {"kind": "youtube#video", "videoId": video_id}
-            }
-        }
-    ))
+    as_writer(youtube).add_video(playlist_id, video_id)
+
+
+def tracks_per_band(choice, settings):
+    if choice in MODES_WITH_COUNT:
+        return settings.get('count', 3)
+    if choice == '3':
+        return settings.get('max_albums', 5)
+    return 1
+
+
+def estimate_adds(state):
+    """Calls still needed to finish `state`: playlist creates + track adds."""
+    per_band = tracks_per_band(state['choice'], state['settings'])
+    calls = 0
+    for job in state['jobs'][state.get('job_index', 0):]:
+        if not job.get('playlist_id'):
+            calls += 1
+        remaining = len(job['bands']) - job.get('band_index', 0)
+        calls += max(0, remaining * per_band - len(job.get('partial_ids', [])))
+    return calls
+
+
+def quota_forecast(state, writer):
+    """Human-readable line on whether the run fits today's quota."""
+    calls = estimate_adds(state)
+    if not writer.uses_quota:
+        return f"About {calls} playlist writes planned via {writer.name}."
+    q = quota_status()
+    msg = (f"About {calls} adds planned ({calls * INSERT_COST} quota units). "
+           f"Quota left today: ~{q['adds_left']} adds ({q['remaining']}/{q['limit']} units).")
+    if calls > q['adds_left']:
+        per_day = max(1, q['limit'] // INSERT_COST)
+        days = -(-(calls - q['adds_left']) // per_day)
+        msg += (f" It will pause when the quota runs out; resume on ~{days} more "
+                "day(s). Set up browser sign-in (python bot.py --setup-browser) "
+                "to skip the quota entirely.")
+    return msg
 
 
 # =============================================================================
@@ -954,6 +1169,8 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
     returns False the run stops there by raising Cancelled.
     Returns the number of duplicates skipped.
     """
+    writer = as_writer(youtube)
+    save = (lambda _s: None) if writer.dry_run else save_progress
     bands = job['bands']
     playlist_id = job['playlist_id']
     log_entries = state['log_entries']
@@ -994,14 +1211,14 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
                     dupes_in_band += 1
                     continue
                 try:
-                    add_video_to_playlist(youtube, playlist_id, v_id)
+                    writer.add_video(playlist_id, v_id)
                 except QuotaExceeded:
                     dupes_skipped += dupes_in_band
                     raise
-                except HttpError as e:
+                except AddFailed as e:
                     # One unavailable video must not cost the band its
                     # remaining tracks: note it and try the next one.
-                    reason = _http_error_reason(e) or str(e)
+                    reason = str(e)
                     log_entries.append(f"Could not add {v_id} for {band}: {reason}")
                     failed += 1
                     continue
@@ -1010,7 +1227,7 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
                 job['added_video_ids'].append(v_id)
                 log_entries.append(f"Added video {v_id} for {band}")
                 added += 1
-                save_progress(state)
+                save(state)
             dupes_skipped += dupes_in_band
 
             summary = f"  Added {added} track(s)"
@@ -1025,7 +1242,7 @@ def process_bands(youtube, job, choice, settings, state, progress_callback=None)
 
         job['band_index'] = i + 1
         job['partial_ids'] = partial = []
-        save_progress(state)
+        save(state)
 
         if progress_callback and progress_callback(i + 1, len(bands), band) is False:
             state['dupes'] = state.get('dupes', 0) + dupes_skipped
@@ -1053,25 +1270,30 @@ def run_jobs(youtube, state, progress_callback=None):
     ran out, or 'stopped' on Ctrl+C / a cancelling `progress_callback`. In
     the last two cases progress is kept so the run can be resumed.
     `state['dupes']` holds the running count of duplicates skipped."""
+    writer = as_writer(youtube)
+    save = (lambda _s: None) if writer.dry_run else save_progress
     choice = state['choice']
     settings = state['settings']
     log_entries = state['log_entries']
     jobs = state['jobs']
     stopped = None
+    print(f"\nWriting playlists via: {writer.name}")
+    print(quota_forecast(state, writer))
+    log_entries.append(f"Writer: {writer.name}")
     result = 'done'
 
     try:
         while state['job_index'] < len(jobs):
             job = jobs[state['job_index']]
             if not job.get('playlist_id'):
-                job['playlist_id'] = create_playlist(
-                    youtube, job['name'], job['description'],
+                job['playlist_id'] = writer.create_playlist(
+                    job['name'], job['description'],
                     state.get('privacy', PLAYLIST_PRIVACY))
                 url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
                 print(f"\nPlaylist '{job['name']}' created: {url}\n")
                 log_entries.extend(job.get('header', []))
                 log_entries.append(f"Playlist URL: {url}\n")
-                save_progress(state)
+                save(state)
             else:
                 url = f"https://music.youtube.com/playlist?list={job['playlist_id']}"
                 print(f"\nContinuing playlist '{job['name']}': {url}\n")
@@ -1080,14 +1302,15 @@ def run_jobs(youtube, state, progress_callback=None):
                 raise Cancelled()
 
             state['dupes'] = state.get('dupes', 0) + process_bands(
-                youtube, job, choice, settings, state, progress_callback)
+                writer, job, choice, settings, state, progress_callback)
             log_entries.append("")
             state['job_index'] += 1
-            save_progress(state)
+            save(state)
     except QuotaExceeded:
         stopped = ("YouTube's daily API quota is used up (about 199 track adds "
                    "per day on a default project). It resets at midnight "
-                   "Pacific time.")
+                   "Pacific time. Tip: run `python bot.py --setup-browser` once "
+                   "to write via YouTube Music instead, which has no daily quota.")
         result = 'quota'
     except (KeyboardInterrupt, Cancelled):
         stopped = "Stopped by you."
@@ -1095,6 +1318,9 @@ def run_jobs(youtube, state, progress_callback=None):
 
     write_log(state)
 
+    if stopped and writer.dry_run:
+        print(f"\n{stopped}")
+        return result
     if stopped:
         save_progress(state)
         job = jobs[state['job_index']]
@@ -1104,6 +1330,10 @@ def run_jobs(youtube, state, progress_callback=None):
         print(f"Log so far saved to {LOG_FILE}")
         return result
 
+    if writer.dry_run:
+        print(f"\nDry run complete: {len(writer.tracks)} track(s) would be added. "
+              "Nothing was written.")
+        return 'done'
     clear_progress()
     total_bands = sum(len(j['bands']) for j in jobs)
     print(f"\nDone! {total_bands} bands processed. {state.get('dupes', 0)} duplicate(s) skipped.")
@@ -1136,10 +1366,58 @@ def new_job(name, description, bands, header):
 # MAIN
 # =============================================================================
 
+BROWSER_SETUP_HELP = """
+Quota-free sign-in (YouTube Music browser auth)
+-----------------------------------------------
+1. Open https://music.youtube.com in Chrome/Firefox, signed in to your account.
+2. Open DevTools (F12) > Network tab, filter for "browse".
+3. Click around (e.g. Library) until a POST request to /browse appears.
+4. Right-click it > Copy > Copy request headers (Firefox: Copy Request Headers).
+5. Paste below, then press Enter, then Ctrl-D (Ctrl-Z then Enter on Windows).
+The headers are saved to browser.json (gitignored). They stay valid until you
+sign out of that browser session.
+"""
+
+
 def main():
-    if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+    args = set(sys.argv[1:])
+    if '--help' in args or '-h' in args:
+        print("Usage: python bot.py [--dry-run] [--setup-browser] [--quota] [--data-api]\n"
+              "  --dry-run        show what would be added; writes nothing, no quota used\n"
+              "  --setup-browser  save YouTube Music sign-in to browser.json (no daily quota)\n"
+              "  --quota          show today's estimated YouTube Data API quota usage\n"
+              "  --data-api       force the YouTube Data API even if browser.json exists")
+        return
+    if '--setup-browser' in args:
+        print(BROWSER_SETUP_HELP)
+        try:
+            setup_browser_auth()
+            print(f"Saved {BROWSER_AUTH_FILE}. Future runs write via YouTube Music - no quota.")
+        except Exception as e:
+            print(f"Setup failed: {e}")
+        return
+    if '--quota' in args:
+        q = quota_status()
+        print(f"{q['date']} (Pacific): ~{q['used']}/{q['limit']} units used, "
+              f"~{q['adds_left']} track adds left. Counts this app's calls only.")
+        if has_browser_auth():
+            print(f"{BROWSER_AUTH_FILE} found: runs write via YouTube Music and skip this quota.")
+        return
+
+    dry_run = '--dry-run' in args
+    use_browser = has_browser_auth() and '--data-api' not in args
+
+    def make_writer():
+        if dry_run:
+            return DryRunWriter()
+        if use_browser:
+            return get_playlist_writer()
+        return DataApiWriter(get_youtube_service())
+
+    if not dry_run and not use_browser and not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
         print(f"Error: no client_secret*.json file found in the current directory.")
-        print("Download it from Google Cloud Console (see README) and place it here.")
+        print("Download it from Google Cloud Console (see README) and place it here,")
+        print("or run `python bot.py --setup-browser` to sign in without one (no quota).")
         return
 
     # --- Check for resume ---
@@ -1147,14 +1425,14 @@ def main():
     if progress and progress['job_index'] >= len(progress['jobs']):
         clear_progress()
         progress = None
-    if progress:
+    if progress and not dry_run:
         job = progress['jobs'][progress['job_index']]
         print(f"\nFound saved progress: playlist {progress['job_index'] + 1}/"
               f"{len(progress['jobs'])} ('{job['name']}'), "
               f"band {job['band_index']}/{len(job['bands'])} done")
         answer = input("Resume previous session? [y/n]: ").strip().lower()
         if answer == 'y':
-            run_jobs(get_youtube_service(), progress)
+            run_jobs(make_writer(), progress)
             return
         clear_progress()
 
@@ -1229,15 +1507,7 @@ def main():
         'log_entries': [],
     }
 
-    total_tracks = sum(len(j['bands']) for j in jobs) * (
-        settings.get('count', 3) if choice in MODES_WITH_COUNT
-        else settings.get('max_albums', 1))
-    if total_tracks > 190:
-        print(f"\nNote: about {total_tracks} tracks planned. A default Google project "
-              "allows about 199 adds per day, so this will pause when the quota "
-              "runs out and can be resumed the next day.")
-
-    run_jobs(get_youtube_service(), state)
+    run_jobs(make_writer(), state)
 
 
 if __name__ == '__main__':

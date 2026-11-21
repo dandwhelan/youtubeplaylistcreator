@@ -6,3 +6,5 @@ client_secret*.json
 playlist_log.txt
 progress.json
 settings.json
+browser.json
+quota.json

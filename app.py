@@ -99,11 +99,21 @@ def _load_credentials():
 
 
 def _get_youtube_or_error():
+    """Return a playlist writer. Prefers the quota-free YouTube Music
+    browser sign-in (browser.json); falls back to the Data API token."""
+    data = request.get_json(silent=True) or {}
+    if data.get('dry_run'):
+        return bot.DryRunWriter(), None
+    if bot.has_browser_auth() and not data.get('force_data_api'):
+        try:
+            return bot.YTMusicWriter(), None
+        except Exception:
+            pass  # bad browser.json: fall through to the Data API
     creds = _load_credentials()
     if not creds:
         return None, (jsonify({'error': 'Not authenticated with YouTube. '
                                          'Click "Connect YouTube" first.'}), 401)
-    return build('youtube', 'v3', credentials=creds), None
+    return bot.DataApiWriter(build('youtube', 'v3', credentials=creds)), None
 
 
 @app.route('/api/auth/start', methods=['POST'])
@@ -157,6 +167,7 @@ def get_keys():
             'present': has_secret,
             'file': bot.YOUTUBE_CLIENT_SECRETS_FILE if has_secret else None,
         },
+        'browser_auth': bot.has_browser_auth(),
     })
 
 
@@ -171,6 +182,27 @@ def save_keys():
     if not changed:
         return jsonify({'error': 'No keys given.'}), 400
     return jsonify({'saved': changed})
+
+
+@app.route('/api/browser_auth', methods=['POST'])
+def browser_auth():
+    """Save YouTube Music request headers as browser.json (quota-free writes)."""
+    data = request.get_json(silent=True) or {}
+    headers_raw = (data.get('headers') or '').strip()
+    if not headers_raw:
+        if os.path.exists(bot.BROWSER_AUTH_FILE):
+            os.remove(bot.BROWSER_AUTH_FILE)
+            return jsonify({'removed': True})
+        return jsonify({'error': 'Paste the request headers first.'}), 400
+    if 'cookie' not in headers_raw.lower():
+        return jsonify({'error': 'No cookie header found. Copy the headers of a '
+                                 'POST /browse request from a signed-in '
+                                 'music.youtube.com tab.'}), 400
+    try:
+        bot.setup_browser_auth(headers_raw)
+    except Exception as e:
+        return jsonify({'error': f'Could not use those headers: {e}'}), 400
+    return jsonify({'saved': bot.BROWSER_AUTH_FILE})
 
 
 @app.route('/api/client_secret', methods=['POST'])
@@ -224,7 +256,9 @@ def status():
             'playlist_total': len(progress['jobs']),
         }
     return jsonify({
-        'authenticated': _load_credentials() is not None,
+        'authenticated': _load_credentials() is not None or bot.has_browser_auth(),
+        'browser_auth': bot.has_browser_auth(),
+        'quota': bot.quota_status(),
         'has_client_secret': os.path.exists(bot.YOUTUBE_CLIENT_SECRETS_FILE),
         'setlist_key': bool(config.get_key('SETLIST_FM_API_KEY')),
         'gemini_key': bool(config.get_key('GEMINI_API_KEY')),
@@ -318,7 +352,8 @@ def _run_state(job, youtube, state):
         job['playlists'] = [
             {'name': j['name'],
              'url': f"https://music.youtube.com/playlist?list={j['playlist_id']}"}
-            for j in state['jobs'] if j.get('playlist_id')]
+            for j in state['jobs']
+            if j.get('playlist_id') and not str(j['playlist_id']).startswith('DRYRUN')]
         job['dupes'] = state.get('dupes', 0)
         return not job['cancel']
 

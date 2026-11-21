@@ -13,6 +13,7 @@
       <span class="pill" id="pill-auth" title="Click for setup steps">YouTube: checking…</span>
       <span class="pill" id="pill-setlist" title="Optional. Click for setup steps">setlist.fm</span>
       <span class="pill" id="pill-gemini" title="Optional. Click for setup steps">Gemini</span>
+      <span class="pill" id="pill-quota" title="Estimated YouTube Data API quota left today (resets midnight Pacific)">Quota</span>
       <button id="btn-connect" class="hidden">Connect YouTube</button>
     </div>
   </header>
@@ -59,6 +60,25 @@
             <div class="row">
               <input type="file" id="cs-file" accept=".json,application/json">
               <button id="btn-cs-upload">Upload</button>
+            </div>
+          </div>
+
+          <div class="key-block">
+            <label>YouTube Music sign-in — no daily quota (recommended) — <span id="ba-status">checking…</span></label>
+            <p class="hint">The Google key above is limited to about <b>199 track adds per day</b>.
+              Signing in with your browser's YouTube Music session instead writes playlists with
+              <b>no daily limit</b>. When set, it is used automatically.</p>
+            <ol class="hint steps">
+              <li>Open <a href="https://music.youtube.com" target="_blank" rel="noopener">music.youtube.com</a>
+                signed in, press <b>F12</b> and open the <b>Network</b> tab; filter for <code>browse</code>.</li>
+              <li>Click <b>Library</b> so a <b>POST /browse</b> request appears.</li>
+              <li>Right-click it → <b>Copy</b> → <b>Copy request headers</b>, and paste below.</li>
+            </ol>
+            <textarea id="ba-headers" rows="4" placeholder="paste request headers (must include cookie)…"></textarea>
+            <div class="row">
+              <button id="btn-ba-save">Save sign-in</button>
+              <button class="secondary" id="btn-ba-remove">Remove</button>
+              <span class="hint" id="ba-msg"></span>
             </div>
           </div>
 
@@ -156,6 +176,10 @@
             <option value="unlisted">Unlisted</option>
             <option value="private" selected>Private</option>
           </select>
+        </div>
+        <div class="setting">
+          <label><input type="checkbox" id="opt-dryrun"> Dry run (preview only)</label>
+          <p class="hint">Lists the tracks that would be added. Writes nothing, uses no quota.</p>
         </div>
         <div class="setting" id="setting-name">
           <label>Playlist name</label>
